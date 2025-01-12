@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Odysee File Manager</title>
+    <style>
+        /* Main app styles */
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+        }
+
+        #modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background-color: rgba(0, 0, 0, 0.7); /* Dimming effect */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+            visibility: hidden; /* Hidden by default */
+            opacity: 0;
+            transition: opacity 0.3s ease, visibility 0.3s ease;
+        }
+
+        #modal-overlay.show {
+            visibility: visible;
+            opacity: 1;
+        }
+
+        #tracker {
+            background-color: white;
+            padding: 20px;
+            border-radius: 10px;
+            width: 400px;
+            text-align: center;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+        }
+
+        #tracker h1 {
+            font-size: 24px;
+            margin: 0;
+            color: #333;
+        }
+
+        #tracker p {
+            font-size: 18px;
+            margin-top: 10px;
+            color: #666;
+        }
+    </style>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Odysee File Manager</title>
+
+    <!-- Set the base URL dynamically for correct resource resolution -->
+    <base href="./">
+
+    <!-- Link styles.css (ensure it's packaged properly) -->
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- Top Bar with Buttons and File Stats -->
+    <div id="top-bar">
+        <!-- Left-aligned buttons -->
+        <div class="left-buttons">
+            <button id="toggle-view-mode">View Downloaded</button>
+            <button id="deselect-all">Deselect All</button>
+            <button id="select-all">Select All</button>
+            <button id="select-no-audio-video">Select All (No Audio/Video)</button>
+            <button id="download-selected">Download Selected Files</button>
+        </div>
+        <div class="file-stats">
+            <span id="selected-count">Selected Files: 0</span>
+            <span id="selected-size">Total Size: 0 MB</span>
+            <progress id="progress-bar" value="0" max="100"></progress>
+            <span id="progress-status">Progress: 0%</span>
+            <button id="cancel-downloads">Cancel Downloads</button>
+        </div>
+    </div>
+
+    <!-- Main Content Section -->
+    <div id="content">
+        <!-- Developer Section -->
+        <div id="developer-section">
+            <input type="text" id="search-developers" placeholder="Search Developers">
+            <div id="developer-list" class="scrollable"></div>
+        </div>
+
+        <!-- Resizable Divider -->
+        <div id="divider"></div>
+
+        <!-- File Section -->
+        <div id="file-section">
+            <input type="text" id="search-files" placeholder="Search Files">
+            <div id="file-list" class="scrollable"></div>
+        </div>
+    </div>    
+
+    <!-- Popup for Viewing File Details -->
+    <div id="popup-overlay">
+        <div id="popup-content">
+            <button id="popup-close">Close</button>
+            <img id="popup-image" src="" alt="File Thumbnail">
+            <h2 id="popup-title"></h2>
+            <p id="popup-description"></p>
+        </div>
+    </div>
+
+    <div id="status-modal" style="display: flex;">
+        <div class="modal-content">
+            <img src="./assets/icon.ico" alt="App Icon" class="modal-icon" />
+            <h2>Syncing to Blockchain</h2>
+            <p>This will take a minute...</p>
+            <p id="status-blocksBehind" class="progress-text">Blocks Remaining: 0</p>
+        </div>
+    </div>
+    
+    
+         <!-- Include renderer.js -->
+    <script src="renderer.js"></script>
+</body>
+</html>

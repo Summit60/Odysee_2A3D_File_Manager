@@ -1,0 +1,449 @@
+/* General Styles */
+html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%; /* Ensures the app fills the entire window */
+    overflow: hidden; /* Prevent scrollbars */
+    font-family: Arial, sans-serif;
+    background-color: #f9f9f9;
+    color: #333;
+}
+
+
+
+/* Top Bar */
+#top-bar {
+    display: flex;
+    justify-content: space-between; /* Aligns items to the left and right */
+    align-items: center;
+    padding: 10px;
+    background-color: #222;
+    color: #fff;
+    height: 80px; /* Fixed height for consistency */
+    box-sizing: border-box;
+}
+
+#top-bar .left-buttons {
+    display: flex;
+    gap: 10px; /* Adds spacing between buttons */
+}
+
+#top-bar .file-stats {
+    display: flex;
+    align-items: center; /* Aligns stats vertically to the center */
+    gap: 20px; /* Adds spacing between stats */
+}
+
+#top-bar button {
+    background-color: #444;
+    color: #fff;
+    border: 1px solid #666;
+    padding: 5px 10px;
+    border-radius: 5px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background-color 0.3s ease, transform 0.2s ease, border-color 0.3s ease;
+}
+
+#top-bar button:hover {
+    background-color: #666;
+    border-color: #888;
+    transform: translateY(-2px);
+}
+
+#top-bar button:active {
+    background-color: #333;
+    transform: translateY(0);
+}
+
+/* File Stats */
+#file-stats span {
+    margin-left: 20px;
+}
+
+/* Main Content Layout */
+#content {
+    display: flex;
+    height: calc(100% - 50px); /* Fill remaining height below top bar */
+    overflow: hidden; /* Prevent scrollbars from the parent container */
+}
+
+/* Developer and File Sections */
+#developer-list {
+    padding: 10px;
+}
+
+.developer-item {
+    display: flex;
+    align-items: center; /* Vertically center content */
+    justify-content: flex-start; /* Align content to the left */
+    padding: 8px 10px;
+    border-bottom: 1px solid #ddd;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+    gap: 15px; /* Add spacing between columns */
+}
+
+.developer-item.selected {
+    background-color: #e3f2fd; /* Light blue background */
+    border: 2px solid #2196f3; /* Blue border */
+    border-radius: 5px; /* Rounded corners */
+    padding: 5px; /* Add some padding for aesthetics */
+}
+
+.developer-item:hover {
+    background-color: #f4f4f4; /* Highlight row on hover */
+}
+
+.developer-info {
+    display: flex;
+    justify-content: space-between;
+    width: 100%;
+}
+
+/* Developer Name (Align Left) */
+.developer-item div:first-child {
+    flex-grow: 1; /* Allow the name column to grow and take remaining space */
+    text-align: left; /* Align developer names to the left */
+    font-size: 14px;
+    font-weight: bold;
+    white-space: nowrap; /* Ensure single-line display */
+    overflow: hidden; /* Prevent overflow for long names */
+    text-overflow: ellipsis; /* Add ellipsis for truncated text */
+}
+
+.developer-stats {
+    flex: 2;
+    display: flex;
+    justify-content: space-between;
+    font-size: 14px;
+    color: #666;
+}
+
+.developer-stats .stat {
+    text-align: center;
+    width: 33%;
+}
+
+/* Developer Columns */
+/* Developer Columns (Fixed Width) */
+.developer-item div:not(:first-child) {
+    flex-basis: auto; /* Allow columns to size based on their content */
+    text-align: center; /* Center-align numerical data */
+    font-size: 14px;
+    white-space: nowrap;
+}
+
+/* Scrollable Areas */
+.scrollable {
+    overflow-y: auto; /* Enable vertical scrolling */
+    height: 100%; /* Ensure the container has a height */
+    flex: 1; /* Fill remaining space */
+    box-sizing: border-box; /* Include padding in height calculation */
+}
+
+/* Inputs for Search */
+input[type="text"] {
+    margin-bottom: 10px;
+    padding: 8px;
+    font-size: 14px;
+    width: calc(100% - 16px); /* Full width minus padding */
+    border: 1px solid #ccc;
+    border-radius: 5px;
+}
+
+#developer-section {
+    border-right: 1px solid #ddd;
+    background-color: #f4f4f4;
+    resize: horizontal;
+    min-width: 20%;
+    max-width: 50%;
+    flex: 1 1 30%;
+    overflow: hidden; /* Disable scrolling */
+}
+
+#divider {
+    width: 5px; /* Divider width */
+    background-color: #ccc;
+    cursor: col-resize; /* Change cursor to indicate resizing */
+    flex-shrink: 0; /* Prevent the divider from shrinking */
+}
+
+#file-section {
+    background-color: #fff;
+    flex: 1 1 70%;
+    overflow: hidden; /* Disable scrolling */
+}
+
+#file-list {
+    display: flex;
+    flex-direction: column; /* Stack items vertically */
+    width: 100%; /* Fill available horizontal space */
+    box-sizing: border-box; /* Include padding and borders in the width */
+    overflow-y: auto; /* Enable scrolling if content exceeds the container height */
+}
+
+.file-item {
+    display: flex;
+    align-items: flex-start;
+    margin-bottom: 10px;
+    border-bottom: 1px solid #ddd;
+    padding-bottom: 10px;
+    position: relative; /* Important for positioning the badge */
+    width: 100%; /* Allow the item to fill the horizontal space */
+    box-sizing: border-box; /* Include padding and borders in the width */
+}
+
+/* File Status Badge */
+.file-status-badge {
+    position: absolute; /* Position relative to the .file-item container */
+    top: 5px; /* Distance from the top */
+    right: 5px; /* Distance from the right */
+    font-size: 12px;
+    padding: 5px 10px;
+    border-radius: 4px;
+    background-color: grey; /* Default background */
+    color: white;
+    font-weight: bold;
+    z-index: 10; /* Ensure it appears above other elements */
+    white-space: nowrap; /* Prevent text wrapping */
+    transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* File Item Image */
+.file-item img {
+    width: 200px; /* Fixed width for the 1:1 block */
+    height: 200px; /* Fixed height for the 1:1 block */
+    object-fit: contain; /* Ensures the entire image fits within the block */
+    border-radius: 5px; /* Optional: Rounded corners */
+    background-color: #f0f0f0; /* Background color for any empty space */
+    display: block;
+    margin: 0 auto; /* Center the image horizontally */
+}
+
+.file-item div {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+}
+
+/* Name, Size, Date, and Description */
+.file-item b {
+    margin: 0 0 5px 0; /* Reduce spacing below the name */
+    font-size: 16px; /* Slightly larger font for emphasis */
+}
+
+.file-item p {
+    margin: 2px 0; /* Minimal vertical spacing between elements */
+    font-size: 14px; /* Ensure readability */
+    line-height: 1.4; /* Adjust line height for compactness */
+}
+
+/* Buttons in Listings */
+.file-item div:last-child {
+    display: inline-block; /* Arrange buttons in a horizontal row */
+    justify-content: flex-start;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: nowrap;
+}
+
+.file-item button {
+    background-color: #0066cc;
+    color: #fff;
+    border: none;
+    padding: 5px 10px;
+    border-radius: 3px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background-color 0.3s ease, transform 0.2s ease;
+}
+
+.file-item button:hover {
+    background-color: #005bb5;
+    transform: translateY(-1px);
+}
+
+.file-item button:active {
+    background-color: #004080;
+    transform: translateY(0);
+}
+
+/* Popup Overlay */
+#popup-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.8);
+    display: none;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+#popup-content {
+    background: #333;
+    color: #fff;
+    padding: 20px;
+    border-radius: 10px;
+    width: 75%;
+    max-width: 800px;
+    max-height: 90%; /* Ensure popup doesn't exceed screen height */
+    overflow-y: auto; /* Scrollable content if needed */
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+/* Popup Image */
+#popup-content img {
+    width: 100%; /* Fit the popup width */
+    height: auto; /* Maintain aspect ratio */
+    object-fit: contain; /* Ensure the full image is displayed within the space */
+    border-radius: 5px; /* Optional: Rounded corners */
+    background-color: #f0f0f0; /* Background color for any empty space */
+}
+
+#popup-content h2, #popup-content p {
+    margin: 10px 0;
+    text-align: left;
+    width: 100%; /* Ensure proper text wrapping */
+}
+
+/* Close Button */
+#popup-close {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    background-color: #444;
+    color: #fff;
+    border: none;
+    padding: 8px 12px;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+
+#popup-close:hover {
+    background-color: #666;
+}
+
+#progress-bar {
+    width: 300px;
+    height: 20px;
+    margin-left: 20px;
+}
+
+.file-stats span {
+    margin-left: 10px;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+.file-stats {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgb(213 213 213 / 80%);
+    display: flex;
+    align-items: center;
+    z-index: 1000;
+    opacity: 1;
+    transition: opacity 0.5s ease;
+    align-content: center;
+    flex-direction: column;
+    justify-content: flex-start;
+}
+
+.hidden {
+    display: none;
+}
+
+.progress-bar {
+    width: 100%;
+    height: 10px;
+    background: #444;
+    margin-top: 10px;
+    border-radius: 5px;
+    overflow: hidden;
+}
+
+.progress {
+    width: 0%;
+    height: 100%;
+    background: #4caf50;
+    transition: width 0.5s ease;
+}
+
+/* Modal styling */
+#status-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.8); /* Semi-transparent background */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+    opacity: 1;
+    transition: opacity 0.5s ease; /* Smooth fade-out */
+}
+
+/* Modal content container */
+.modal-content {
+    background-color: #1d1d1d;
+    border-radius: 10px;
+    padding: 20px;
+    text-align: center;
+    box-shadow: 0px 4px 15px rgba(0, 0, 0, 0.3);
+    animation: scaleIn 0.3s ease; /* Scale-in animation */
+}
+
+/* Keyframes for scale-in animation */
+@keyframes scaleIn {
+    from {
+        transform: scale(0.8);
+        opacity: 0;
+    }
+    to {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+/* Icon styling */
+.modal-icon {
+    width: 260px;
+    height: 260px;
+    margin-bottom: 15px;
+}
+
+/* Progress text */
+.progress-text {
+    font-size: 18px;
+    color: rgb(126, 125, 125);
+    margin-top: 10px;
+    font-weight: bold;
+}
+
+/* Title */
+h2 {
+    font-size: 22px;
+    margin-bottom: 10px;
+    color: rgb(126, 125, 125);
+}
