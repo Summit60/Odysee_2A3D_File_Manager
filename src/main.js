@@ -4,6 +4,14 @@ const sqlite3 = require('sqlite3').verbose();
 const { shell } = require('electron');
 const { spawn, exec } = require('child_process');
 const fs = require('fs');
+const axios = require('axios')
+
+// Ensure this is at the top of your main.js
+const currentVersion = app.getVersion();
+console.log(`[INFO] Application Current Version: ${currentVersion}`);
+
+// GitHub API URL for latest release
+const GITHUB_RELEASES_API = 'https://api.github.com/repos/Summit60/Odysee_2A3D_File_Manager/releases/latest';
 
 const getAppPath = () => app.isPackaged
     ? path.join(process.resourcesPath) // In packaged app
@@ -336,6 +344,10 @@ async function waitForSync(mainWindow) {
         if (blocksBehind === 0) {
             console.log('[INFO] Blockchain is fully synchronized.');
             mainWindow.webContents.send('lbrynet-status', 'Synchronization complete.');
+
+            // Check for updates after synchronization
+            await checkForUpdates(currentVersion);
+
             break; // Exit the loop when synchronized
         } else if (blocksBehind !== null) {
             console.log(`[DEBUG] Syncing blockchain: ${blocksBehind} blocks remaining...`);
@@ -492,12 +504,12 @@ app.on('ready', async() => {
                 },
                 
                 {
-                    label: 'Convert XLS to DB',
+                    label: 'Convert ODS to DB',
                     click: async () => {
                         const filePaths = dialog.showOpenDialogSync(mainWindow, {
                             properties: ['openFile'],
                             filters: [
-                                { name: 'Excel Files', extensions: ['xls'] },
+                                { name: 'Excel Files', extensions: ['ods'] },
                                 { name: 'All Files', extensions: ['*'] },
                             ],
                         });
@@ -583,6 +595,12 @@ app.on('ready', async() => {
                         }
                     },
                 }, 
+                {
+                    label: 'Check for Updates',
+                    click: async () => {
+                        await checkForUpdates(currentVersion);
+                    },
+                },
 
                 { role: 'quit' },
             ],
@@ -634,6 +652,86 @@ async function loadDatabase(mainWindow) {
     } else {
         console.log('[INFO] Database selection canceled.');
     }
+}
+
+async function checkForUpdates(currentVersion) {
+    const updateUrl = 'https://api.github.com/repos/Summit60/Odysee_2A3D_File_Manager/releases/latest';
+
+    try {
+        console.log('[INFO] Checking for updates...');
+        console.log(`[DEBUG] CurrentVersion Passed to checkForUpdates: ${currentVersion}`);
+
+        const response = await axios.get(updateUrl);
+        console.log('[DEBUG] GitHub API Response:', response.data);
+
+        const latestRelease = response.data;
+
+        if (!latestRelease || !latestRelease.tag_name) {
+            throw new Error('Unable to determine the latest version from GitHub.');
+        }
+
+        const latestVersion = latestRelease.tag_name.replace(/^v/, ''); // Remove 'v' prefix
+        console.log(`[INFO] Current version: ${currentVersion}, Latest version: ${latestVersion}`);
+
+        if (!currentVersion || !latestVersion) {
+            throw new Error(
+                `Invalid version(s) detected. CurrentVersion: ${currentVersion}, LatestVersion: ${latestVersion}`
+            );
+        }
+
+        const comparisonResult = compareVersions(currentVersion, latestVersion);
+
+        if (comparisonResult === 0) {
+            console.log('[INFO] Application is up to date.');
+            dialog.showMessageBox({
+                type: 'info',
+                title: 'Up to Date',
+                message: `Your application is up to date! Current version: ${currentVersion}`,
+            });
+        } else if (comparisonResult < 0) {
+            console.log(`[INFO] Update available: Current (${currentVersion}) < Latest (${latestVersion})`);
+            const choice = dialog.showMessageBoxSync({
+                type: 'question',
+                buttons: ['Download', 'Cancel'],
+                title: 'Update Available',
+                message: `A new version is available: ${latestVersion}\n\nDo you want to download it?`,
+            });
+
+            if (choice === 0) {
+                shell.openExternal('https://github.com/Summit60/Odysee_2A3D_File_Manager/releases');
+            }
+        } else {
+            console.log(`[INFO] Newer version installed: Current (${currentVersion}) > Latest (${latestVersion})`);
+            dialog.showMessageBox({
+                type: 'info',
+                title: 'Newer Version Installed',
+                message: `You have a newer version (${currentVersion}) than the latest release on GitHub (${latestVersion}).`,
+            });
+        }
+    } catch (error) {
+        console.error('[ERROR] Failed to check for updates:', error.message);
+        dialog.showMessageBox({
+            type: 'error',
+            title: 'Update Check Failed',
+            message: `Failed to check for updates. Please try again later.\n\nError: ${error.message}`,
+        });
+    }
+}
+
+function compareVersions(version1, version2) {
+    const normalizeVersion = (version) =>
+        version.split('.').map((part) => parseInt(part, 10) || 0);
+
+    const [v1, v2] = [normalizeVersion(version1), normalizeVersion(version2)];
+
+    for (let i = 0; i < Math.max(v1.length, v2.length); i++) {
+        const num1 = v1[i] || 0; // Treat missing parts as 0
+        const num2 = v2[i] || 0;
+
+        if (num1 > num2) return 1; // version1 is newer
+        if (num1 < num2) return -1; // version2 is newer
+    }
+    return 0; // Versions are equal
 }
 
 ipcMain.handle('getDownloadedFilesForDeveloper', async (event, developerName) => {
