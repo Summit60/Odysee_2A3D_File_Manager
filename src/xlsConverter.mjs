@@ -3,7 +3,7 @@ import path, { join } from 'path';
 import { fileURLToPath } from 'url';
 import sqlite3 from 'sqlite3';
 import axios from 'axios';
-import xls from 'xlsjs';
+import xlsx from 'xlsx';
 import pLimit from 'p-limit';
 
 // Emulate __dirname in ES Modules
@@ -92,18 +92,18 @@ function setupDatabase(dbPath) {
 
 // Read Odysee links and metadata from an XLS file
 function readOdyseeLinksAndDate(fileName, sheetIndex) {
-    const workbook = xls.readFile(fileName);
+    const workbook = xlsx.readFile(fileName, { raw: true, cellDates: true });
     const sheetName = workbook.SheetNames[sheetIndex - 1];
     const sheet = workbook.Sheets[sheetName];
-    const rows = xls.utils.sheet_to_json(sheet, { header: 1 });
+    const rows = xlsx.utils.sheet_to_json(sheet, { header: 1 });
 
     // Get links from Column B
     const links = rows.slice(1).map(row => row[1]?.trim()).filter(Boolean);
 
     // Get date from Column K, Row 2
     const dateCell = rows[1][10];
-    const dbDate = typeof dateCell === 'number'
-        ? new Date((dateCell - 25569) * 86400 * 1000).toISOString().slice(0, 10).replace(/-/g, '')
+    const dbDate = dateCell instanceof Date
+        ? dateCell.toISOString().slice(0, 10).replace(/-/g, '')
         : dateCell?.replace(/-/g, '');
     return { links, dbDate };
 }
@@ -163,14 +163,18 @@ async function fetchClaimsForDeveloper(devName, devClaimId) {
                     logToFile(`[WARN] Invalid release_time for claim_id ${item.claim_id}: ${item.value?.release_time}`);
                 }
 
+                // Extract Dev_Name from Alt_File_URL
+                const Alt_File_URL = item.canonical_url || '';
+                const extractedDevName = extractDevName(Alt_File_URL);
+
                 claims.push({
                     File_Name: item.value?.title || '',
                     Alt_File_Name: sanitizeFolderName(item.value?.title || ''),
                     File_Claim_ID: item.claim_id,
                     File_URL: item.permanent_url,
-                    Alt_File_URL: item.canonical_url,
+                    Alt_File_URL,
                     File_Size: fileSize,
-                    Dev_Name: devName,
+                    Dev_Name: extractedDevName, // Use extracted Dev_Name
                     Dev_Claim_ID: devClaimId,
                     Release_Date: releaseDate, // Use validated or default value
                     Media_Type: item.value?.source?.media_type || '',
@@ -191,6 +195,7 @@ async function fetchClaimsForDeveloper(devName, devClaimId) {
 // Main process
 async function populateDatabase(excelFile, sheetIndex, libraryFolder) {
     try {
+        // Existing database population logic...
         const { links, dbDate } = readOdyseeLinksAndDate(excelFile, sheetIndex);
         const dbName = `odysee_${dbDate}.db`;
         const dbPath = path.join(libraryFolder, dbName);
@@ -199,15 +204,8 @@ async function populateDatabase(excelFile, sheetIndex, libraryFolder) {
 
         const db = setupDatabase(dbPath);
 
-        // Check if links are valid
-        if (!links || links.length === 0) {
-            logToFile('[ERROR] No links found in the Excel file.');
-            db.close();
-            throw new Error('No links found in the Excel file.');
-        }
-
-        // Fetch claims for each link
-        logToFile('[DEBUG] Resolving claims for links...');
+        // Process developer claims
+        logToFile('[DEBUG] Resolving claims for developer links...');
         const resolveTasks = links.map(link => {
             const lbryUrl = convertToLbryUrl(link); // Convert link to LBRY URL
             if (!lbryUrl) return null; // Skip invalid links
@@ -216,7 +214,6 @@ async function populateDatabase(excelFile, sheetIndex, libraryFolder) {
             return limit(() => resolveClaimId(lbryUrl).then(claimId => ({ devName, claimId })));
         }).filter(Boolean); // Remove null tasks
 
-        // Wait for all links to resolve
         const resolved = (await Promise.all(resolveTasks)).filter(result => result?.claimId);
 
         // Fetch claims for developers
@@ -225,9 +222,16 @@ async function populateDatabase(excelFile, sheetIndex, libraryFolder) {
             limit(() => fetchClaimsForDeveloper(devName, claimId))
         );
 
-        const allClaims = (await Promise.all(claimTasks)).flat(); // Combine all claims into a single array
-        logToFile('[DEBUG] All claims resolved:', allClaims);
+        const developerClaims = (await Promise.all(claimTasks)).flat();
 
+        // Process individual claims from Sheet 5
+        logToFile('[DEBUG] Processing individual claims from Sheet 5...');
+        const individualClaims = await processIndividualClaims(excelFile);
+
+        // Combine all claims (developer + individual)
+        const allClaims = [...developerClaims, ...individualClaims];
+
+        // Insert all claims into the database
         await new Promise((resolve, reject) => {
             db.serialize(() => {
                 const insertStmt = db.prepare(`
@@ -239,26 +243,25 @@ async function populateDatabase(excelFile, sheetIndex, libraryFolder) {
                 `);
 
                 allClaims.forEach(claim => {
-                    logToFile('[DEBUG] Inserting claim into database:', claim);
-
+                    logToFile(`[DEBUG] Claim being inserted: ${JSON.stringify(claim, null, 2)}`);
                     insertStmt.run(
                         claim.File_Name,
-                        claim.Alt_File_Name,
+                        sanitizeFolderName(claim.File_Name),
                         claim.File_Claim_ID,
                         claim.File_URL,
-                        claim.Alt_File_URL,
-                        claim.File_Size,
+                        claim.Alt_File_URL || null,
+                        claim.File_Size || 0,
                         claim.Dev_Name,
-                        claim.Dev_Claim_ID,
-                        claim.Release_Date,
-                        claim.Media_Type,
-                        claim.Description,
-                        claim.Thumbnail_URL,
-                        claim.File_Download_Name,
+                        claim.Dev_Claim_ID || null,
+                        claim.Release_Date || 'Unknown',
+                        claim.Media_Type || '',
+                        claim.Description || '',
+                        claim.Thumbnail_URL || '',
+                        claim.File_Download_Name || '',
                         (err) => {
                             if (err) {
                                 logToFile('[ERROR] Failed to insert claim:', err.message);
-                                reject(err); // Reject if an error occurs during insertion
+                                reject(err);
                             }
                         }
                     );
@@ -267,17 +270,178 @@ async function populateDatabase(excelFile, sheetIndex, libraryFolder) {
                 insertStmt.finalize();
 
                 db.close(() => {
-                    logToFile(`Database created: ${dbPath}`);
-                    resolve(); // Resolve when database operations complete
+                    logToFile(`[INFO] Database population completed: ${dbPath}`);
+                    resolve();
                 });
             });
         });
 
+        // Perform cleanup
+        await cleanupDatabase(dbPath);
+
         return dbPath; // Return the path to the created database
     } catch (err) {
         logToFile('[ERROR] Failed to populate database:', err.message);
-        throw err; // Rethrow the error to be handled by the caller
+        throw err;
     }
+}
+
+// Read individual claims from Sheet 5
+function readIndividualClaims(fileName) {
+    const workbook = xlsx.readFile(fileName, { raw: true, cellDates: true });
+    const sheetName = workbook.SheetNames[4]; // Sheet 5 (0-based index)
+    const sheet = workbook.Sheets[sheetName];
+    const rows = xlsx.utils.sheet_to_json(sheet, { header: 1 });
+
+    // Extract claims: Column A (File_Name), Column B (Odysee URL)
+    const claims = rows.slice(1).map(row => ({
+        File_Name: row[0]?.trim() || 'Unknown File',
+        File_URL: row[1]?.trim(),
+        Dev_Name: 'AnonymousDevs',
+    })).filter(claim => claim.File_Name && claim.File_URL);
+
+    return claims;
+}
+
+// Fetch metadata for a single claim by claim_id
+async function fetchMetadataForIndividualClaim(lbryUrl) {
+    try {
+        const response = await axios.post('https://api.lbry.tv/api/v1/proxy', {
+            method: 'resolve',
+            params: { urls: [lbryUrl] },
+        });
+
+        const metadata = response.data.result[lbryUrl];
+
+        if (!metadata) {
+            logToFile(`[WARN] No metadata found for LBRY URL: ${lbryUrl}`);
+            return null;
+        }
+
+        // Extract relevant fields
+        const {
+            value = {},
+            permanent_url: File_URL,
+            canonical_url: Alt_File_URL,
+            claim_id: File_Claim_ID,
+        } = metadata;
+
+        // Generate Dev_Name based on Alt_File_URL
+        const Dev_Name = extractDevName(Alt_File_URL);
+
+        return {
+            File_Name: value.title || 'Unknown File',
+            Alt_File_Name: sanitizeFolderName(value.title || 'Unknown File'),
+            File_Claim_ID,
+            File_URL,
+            Alt_File_URL,
+            File_Size: value.source?.size || 0,
+            Dev_Name, // Use extracted Dev_Name
+            Dev_Claim_ID: null,
+            Release_Date: value.release_time
+                ? new Date(value.release_time * 1000).toISOString().split('T')[0]
+                : 'Unknown',
+            Media_Type: value.source?.media_type || '',
+            Description: value.description || '',
+            Thumbnail_URL: value.thumbnail?.url || '',
+            File_Download_Name: value.source?.name || '',
+        };
+    } catch (error) {
+        logToFile(`[ERROR] Failed to fetch metadata for LBRY URL ${lbryUrl}: ${error.message}`);
+        return null;
+    }
+}
+
+async function processIndividualClaims(excelFile) {
+    logToFile('[DEBUG] Reading individual claims from Sheet 5...');
+    const individualClaims = readIndividualClaims(excelFile);
+
+    // Fetch metadata for each claim
+    const claimTasks = individualClaims.map((claim) => {
+        const lbryUrl = convertToLbryUrl(claim.File_URL);
+        if (!lbryUrl) return null;
+
+        return limit(() => fetchMetadataForIndividualClaim(lbryUrl));
+    }).filter(Boolean); // Filter out null tasks
+
+    const resolvedClaims = await Promise.all(claimTasks);
+
+    // Filter out failed or null metadata
+    const validClaims = resolvedClaims.filter((claim) => claim !== null);
+
+    logToFile(`[DEBUG] Successfully processed ${validClaims.length} individual claims.`);
+    return validClaims;
+}
+
+async function cleanupDatabase(dbPath) {
+    const db = new sqlite3.Database(dbPath);
+
+    return new Promise((resolve, reject) => {
+        db.serialize(() => {
+            logToFile(`[DEBUG] Starting cleanup for database: ${dbPath}`);
+
+            // Handle invalid Release_Date values
+            db.run(`
+                UPDATE Claims
+                SET Release_Date = '0000-00-00'
+                WHERE Release_Date IS NULL OR Release_Date = 'Unknown'
+            `, (err) => {
+                if (err) {
+                    logToFile(`[ERROR] Failed to clean invalid Release_Date values: ${err.message}`);
+                    reject(err); // Reject the promise
+                    return;
+                }
+
+                logToFile(`[INFO] Invalid Release_Date values cleaned.`);
+
+                // Perform optimized cleanup
+                db.run(`
+                    DELETE FROM Claims
+                    WHERE rowid NOT IN (
+                        SELECT rowid
+                        FROM Claims c1
+                        WHERE Release_Date = (
+                            SELECT MAX(Release_Date)
+                            FROM Claims c2
+                            WHERE c1.File_Claim_ID = c2.File_Claim_ID
+                        )
+                    )
+                `, (err) => {
+                    if (err) {
+                        logToFile(`[ERROR] Optimized cleanup query failed: ${err.message}`);
+                        reject(err); // Reject the promise
+                        return;
+                    }
+
+                    logToFile(`[INFO] Optimized cleanup query completed successfully.`);
+                });
+            });
+        });
+
+        // Close the database after all queries are completed
+        db.close((err) => {
+            if (err) {
+                logToFile(`[ERROR] Failed to close database during cleanup: ${err.message}`);
+                reject(err); // Reject the promise
+            } else {
+                logToFile(`[INFO] Database cleanup completed successfully.`);
+                resolve(); // Resolve the promise
+            }
+        });
+    });
+}
+
+// Extract Dev_Name from Alt_File_URL
+function extractDevName(altFileUrl) {
+    if (!altFileUrl) return 'UnknownDev';
+
+    // Match the part inside the forward slashes and replace "#" with "_"
+    const match = altFileUrl.match(/lbry:\/\/(@[^\/]+)/);
+    if (match && match[1]) {
+        return match[1].replace(/#/g, '_');
+    }
+
+    return 'UnknownDev'; // Default if no match is found
 }
    
 // Export the function so it can be called from another script
