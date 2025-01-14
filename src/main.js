@@ -1,3 +1,4 @@
+//////////////Imports and Constants//////////////
 const { app, BrowserWindow, ipcMain, Menu, dialog } = require('electron');
 const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
@@ -6,21 +7,38 @@ const { spawn, exec } = require('child_process');
 const fs = require('fs');
 const axios = require('axios')
 
-// Ensure this is at the top of your main.js
+
+const getAppPath = () => app.isPackaged
+    ? process.resourcesPath // In packaged app
+    : __dirname; // In development
+
+const defaultConfig = {
+    libraryFolder: null,
+    lastDatabase: null,
+};
+
+const userDataPath = app.getPath('userData');
+const configPath = path.join(userDataPath, 'config.json');
 const currentVersion = app.getVersion();
-console.log(`[INFO] Application Current Version: ${currentVersion}`);
+const appPath = getAppPath();
+const logFilePath = path.join(app.getPath('userData'), 'app.log');
+
+
 
 // GitHub API URL for latest release
 const GITHUB_RELEASES_API = 'https://api.github.com/repos/Summit60/Odysee_2A3D_File_Manager/releases/latest';
 
-const getAppPath = () => app.isPackaged
-    ? path.join(process.resourcesPath) // In packaged app
-    : __dirname;                       // In development
+//////////////Global Variables and Configuration//////////////
 
-const appPath = getAppPath();
+let mainWindow; // Reference to the main application window
+let dbPath = null; // Global variable to store the database path
+let libraryFolder = null; // Restore library folder if cached
+let appConfig = { libraryFolder: null, lastDatabase: null }; // Initialize appConfig
+let statusEmitter = null; // Keep track of lbrynet status updates
 
-// Log file path
-const logFilePath = path.join(app.getPath('userData'), 'app.log');
+console.log(`[INFO] Application Current Version: ${currentVersion}`);
+
+//////////////Utility Functions//////////////
 
 // Log to file function
 function logToFile(message) {
@@ -34,41 +52,85 @@ function logToFile(message) {
     }
 }
 
-ipcMain.handle('log-to-file', async (event, message) => {
-    const logFilePath = path.join(app.getPath('userData'), 'app.log');
-    const timestamp = new Date().toISOString();
-    const logMessage = `[${timestamp}] ${message}\n`;
-    try {
-        fs.appendFileSync(logFilePath, logMessage, 'utf-8');
-        console.log(logMessage.trim()); // Also log to console for debugging
-    } catch (error) {
-        console.error('[ERROR] Failed to write to log file:', error.message);
+function compareVersions(version1, version2) {
+    const normalizeVersion = (version) =>
+        version.split('.').map((part) => parseInt(part, 10) || 0);
+
+    const [v1, v2] = [normalizeVersion(version1), normalizeVersion(version2)];
+
+    for (let i = 0; i < Math.max(v1.length, v2.length); i++) {
+        const num1 = v1[i] || 0; // Treat missing parts as 0
+        const num2 = v2[i] || 0;
+
+        if (num1 > num2) return 1; // version1 is newer
+        if (num1 < num2) return -1; // version2 is newer
     }
-});
-
-
-//Config
-// Get the userData path
-const userDataPath = app.getPath('userData');
-const configPath = path.join(userDataPath, 'config.json');
-
-// Default configuration
-const defaultConfig = {
-    libraryFolder: null,
-    lastDatabase: null,
-};
-
-// Ensure the config file exists
-if (!fs.existsSync(configPath)) {
-    console.log('[INFO] Config file not found. Creating a default one at:', configPath);
-    fs.writeFileSync(configPath, JSON.stringify(defaultConfig, null, 2));
+    return 0; // Versions are equal
 }
 
-let mainWindow; // Reference to the main application window
-let dbPath = null; // Global variable to store the database path
-let libraryFolder = null; // Restore library folder if cached
+async function checkForUpdates(currentVersion) {
+    const updateUrl = 'https://api.github.com/repos/Summit60/Odysee_2A3D_File_Manager/releases/latest';
 
-let appConfig = { libraryFolder: null, lastDatabase: null }; // Initialize appConfig
+    try {
+        console.log('[INFO] Checking for updates...');
+        console.log(`[DEBUG] CurrentVersion Passed to checkForUpdates: ${currentVersion}`);
+
+        const response = await axios.get(updateUrl);
+        console.log('[DEBUG] GitHub API Response:', response.data);
+
+        const latestRelease = response.data;
+
+        if (!latestRelease || !latestRelease.tag_name) {
+            throw new Error('Unable to determine the latest version from GitHub.');
+        }
+
+        const latestVersion = latestRelease.tag_name.replace(/^v/, ''); // Remove 'v' prefix
+        console.log(`[INFO] Current version: ${currentVersion}, Latest version: ${latestVersion}`);
+
+        if (!currentVersion || !latestVersion) {
+            throw new Error(
+                `Invalid version(s) detected. CurrentVersion: ${currentVersion}, LatestVersion: ${latestVersion}`
+            );
+        }
+
+        const comparisonResult = compareVersions(currentVersion, latestVersion);
+
+        if (comparisonResult === 0) {
+            console.log('[INFO] Application is up to date.');
+            dialog.showMessageBox({
+                type: 'info',
+                title: 'Up to Date',
+                message: `Your application is up to date! Current version: ${currentVersion}`,
+            });
+        } else if (comparisonResult < 0) {
+            console.log(`[INFO] Update available: Current (${currentVersion}) < Latest (${latestVersion})`);
+            const choice = dialog.showMessageBoxSync({
+                type: 'question',
+                buttons: ['Download', 'Cancel'],
+                title: 'Update Available',
+                message: `A new version is available: ${latestVersion}\n\nDo you want to download it?`,
+            });
+
+            if (choice === 0) {
+                shell.openExternal('https://github.com/Summit60/Odysee_2A3D_File_Manager/releases');
+            }
+        } else {
+            console.log(`[INFO] Newer version installed: Current (${currentVersion}) > Latest (${latestVersion})`);
+            dialog.showMessageBox({
+                type: 'info',
+                title: 'Newer Version Installed',
+                message: `You have a newer version (${currentVersion}) than the latest release on GitHub (${latestVersion}).`,
+            });
+        }
+    } catch (error) {
+        console.error('[ERROR] Failed to check for updates:', error.message);
+        dialog.showMessageBox({
+            type: 'error',
+            title: 'Update Check Failed',
+            message: `Failed to check for updates. Please try again later.\n\nError: ${error.message}`,
+        });
+    }
+}
 
 // Load configuration from config.json
 function loadConfig() {
@@ -85,7 +147,6 @@ function loadConfig() {
     }
 }
 
-// Load config on app start
 loadConfig();
 
 // Save configuration to config.json
@@ -98,130 +159,71 @@ function saveConfig() {
     }
 }
 
-// Set library folder from config if available
-if (appConfig.libraryFolder) {
-    libraryFolder = appConfig.libraryFolder;
-    global.libraryFolder = appConfig.libraryFolder; // Ensure global variable is updated
-    console.log(`[INFO] Restored library folder: ${libraryFolder}`);
-} else {
-    console.error('[ERROR] Library folder not found in configuration. Prompt user to set it.');
-}
+//////////////Database Functions//////////////
 
-// Set database path from config if available
-if (appConfig.lastDatabase) {
-    dbPath = appConfig.lastDatabase;
-    console.log(`[INFO] Restored last database: ${dbPath}`);
-}
+async function loadDatabase(mainWindow) {
+    console.log('[INFO] Initiating database load process.');
 
-// Ensure library folder is set
-async function ensureLibraryFolder(mainWindow) {
-    if (!appConfig.libraryFolder || !fs.existsSync(appConfig.libraryFolder)) {
-        console.log('[INFO] Library folder is not set or does not exist. Prompting the user.');
+    const dbPathResult = dialog.showOpenDialogSync(mainWindow, {
+        properties: ['openFile'],
+        title: 'Select Database File',
+        filters: [
+            { name: 'SQLite Databases', extensions: ['db'] },
+            { name: 'All Files', extensions: ['*'] },
+        ],
+    });
 
-        const folder = await showLibrarySelectionWindow();
-        if (folder) {
-            libraryFolder = folder;
-            appConfig.libraryFolder = folder;
-            saveConfig();
-            console.log('[INFO] Library folder set to:', folder);
-        } else {
-            console.error('[ERROR] No library folder selected. Exiting application.');
-            app.quit();
-        }
+    if (dbPathResult && dbPathResult.length > 0) {
+        const selectedDbPath = dbPathResult[0];
+        console.log('[INFO] Database loaded:', selectedDbPath);
+
+        // Update the global `dbPath`
+        dbPath = selectedDbPath;
+
+        // Save to `appConfig` and persist to config.json
+        appConfig.lastDatabase = selectedDbPath;
+        saveConfig();
+        console.log('[INFO] lastDatabase updated in config:', appConfig.lastDatabase);
+
+        // Notify renderer process about the loaded database
+        console.log('[DEBUG] Sending database-loaded event to renderer.');
+        mainWindow.webContents.send('database-loaded', selectedDbPath);
     } else {
-        libraryFolder = appConfig.libraryFolder;
-        console.log('[INFO] Library folder exists:', libraryFolder);
+        console.log('[INFO] Database selection canceled.');
     }
 }
 
-function showLibrarySelectionWindow() {
-    return new Promise((resolve) => {
-        const selectionWindow = new BrowserWindow({
-            width: 600,
-            height: 400,
-            title: 'Select Library Folder',
-            resizable: false,
-            webPreferences: {
-                nodeIntegration: true,
-                contextIsolation: false,
-            },
+function fetchFilesFromDatabase(dbPath) {
+    return new Promise((resolve, reject) => {
+        if (typeof dbPath !== 'string' || !dbPath.trim()) {
+            console.error('[ERROR] Invalid database path:', dbPath);
+            return reject(new TypeError('Invalid database path. String expected.'));
+        }
+
+        const db = new sqlite3.Database(dbPath, (err) => {
+            if (err) {
+                console.error('[ERROR] Failed to open database:', err.message);
+                return reject(err);
+            }
         });
 
-        // Load HTML content for the selection window
-        selectionWindow.loadURL(`data:text/html,
-            <html>
-            <head>
-                <style>
-                    body {
-                        font-family: Arial, sans-serif;
-                        margin: 0;
-                        padding: 20px;
-                        display: flex;
-                        flex-direction: column;
-                        justify-content: center;
-                        align-items: center;
-                        text-align: center;
-                        overflow-wrap: break-word;
-                    }
-                    h2 {
-                        margin-bottom: 20px;
-                    }
-                    p {
-                        max-width: 90%;
-                        margin: 20px 0;
-                        line-height: 1;
-                    }
-                    button {
-                        padding: 10px 20px;
-                        font-size: 16px;
-                        cursor: pointer;
-                    }
-                </style>
-            </head>
-            <body>
-                <h2>Odysee 2A3D Library Manager</h2>
-                <p>
-                    To proceed, you need to select a folder to use as your library. This folder 
-                    will store all of your Treasures as well as database files used in the application. you
-                    can change this later in the 'file' menu. Happy Sailing!
-                </p>
-                <p>
-                - Summit_60
-                </p>
-                <button id="select-folder">Select Folder</button>
-                <script>
-                    const { ipcRenderer } = require('electron');
-                    document.getElementById('select-folder').addEventListener('click', async () => {
-                        const folder = await ipcRenderer.invoke('select-library-folder');
-                        ipcRenderer.send('library-folder-selected', folder);
-                    });
-                </script>
-            </body>
-            </html>
-        `);
+        const query = `SELECT File_Name, Alt_File_Name, File_Claim_ID, Dev_Name, Release_Date FROM Claims`;
 
-        // Handle folder selection from the dialog
-        ipcMain.handle('select-library-folder', async () => {
-            const result = dialog.showOpenDialogSync(selectionWindow, {
-                properties: ['openDirectory'],
-                title: 'Select Library Folder',
-            });
-            return result ? result[0] : null;
-        });
+        db.all(query, [], (err, rows) => {
+            if (err) {
+                console.error('[ERROR] Failed to fetch files from database:', err.message);
+                db.close();
+                return reject(err);
+            }
 
-        // Save the selected folder and close the selection window
-        ipcMain.once('library-folder-selected', (event, folder) => {
-            selectionWindow.close();
-            resolve(folder); // Resolve the promise with the selected folder
+            console.log(`[INFO] Fetched ${rows.length} files from database:`, dbPath);
+            db.close();
+            resolve(rows);
         });
     });
 }
 
-
-
-
-///////////////  LBRY BLOCKCHAIN CONNECTION  /////////////// 
-
+//////////////LBRY Daemon Management//////////////
 
 // Function to check the status of lbrynet
 async function checkLbrynetStatus() {
@@ -381,8 +383,6 @@ async function retryCheckLbrynetStatus(retries = 20, interval = 2000) {
     return null; // Return null if retries are exhausted
 }
 
-let statusEmitter = null; // Keep track of lbrynet status updates
-
 // Periodically send lbrynet status updates
 ipcMain.on('start-status-updates', (event) => {
     console.log('[INFO] Starting status updates...');
@@ -414,325 +414,158 @@ ipcMain.on('stop-status-updates', () => {
     }
 });
 
+//////////////Library Management//////////////
 
+// Ensure library folder is set
+async function ensureLibraryFolder(mainWindow) {
+    if (!appConfig.libraryFolder || !fs.existsSync(appConfig.libraryFolder)) {
+        console.log('[INFO] Library folder is not set or does not exist. Prompting the user.');
 
-///////////////  LBRY BLOCKCHAIN CONNECTION  ///////////////
-
-
-
-
-
-/**
- * Creates the main application window and sets up initial configurations.
- */
-app.on('ready', async() => {
-    console.log('[INFO] Electron app is ready.');
-
-    await ensureLibraryFolder(mainWindow);
-
-    // Check if downloaded.db exists in the library folder
-    const downloadedDbPath = path.join(libraryFolder, 'downloaded.db');
-    if (!fs.existsSync(downloadedDbPath)) {
-        console.log('[INFO] downloaded.db does not exist. Creating a new database...');
-        const db = new sqlite3.Database(downloadedDbPath);
-
-        // Ensure the database structure exists
-        ensureDatabaseStructure(db)
-            .then(() => {
-                console.log('[INFO] Database structure ensured.');
-            })
-            .catch((err) => {
-                console.error('[ERROR] Failed to ensure database structure:', err.message);
-                app.quit(); // Exit if database creation fails
-            })
-            .finally(() => {
-                db.close();
-            });
-    } else {
-        console.log('[INFO] downloaded.db already exists:', downloadedDbPath);
-    }
-
-    mainWindow = new BrowserWindow({
-        width: 1400,
-        height: 1000,
-        icon: path.join(appPath, 'assets', 'icon.ico'), // Ensure 'icon.png' exists
-        webPreferences: {
-            preload: path.join(appPath, 'preload.js'),
-            nodeIntegration: true, // Disable Node.js integration in renderer
-            contextIsolation: true, // Enable context isolation
-            devTools: true, // Explicitly enable DevTools
-        },
-    });
-    
-    // Load the index.html file
-    mainWindow.loadURL(`file://${path.join(__dirname, '/index.html')}`);
-
-    try {
-        console.log('[DEBUG] About to call ensureLbrynetRunning...');
-        await ensureLbrynetRunning(mainWindow);
-    } catch (error) {
-        console.error('[ERROR] Failed to start lbrynet:', error.message);
-    }
-    
-    // Create the menu
-    const menu = Menu.buildFromTemplate([
-        {
-            label: 'File',
-            submenu: [                                                                      
-                
-                {
-                    label: 'Set Library Folder',
-                    click: async () => {
-                        const folderPath = dialog.showOpenDialogSync({
-                            properties: ['openDirectory'],
-                        });
-    
-                        if (folderPath && folderPath.length > 0) {
-                            global.libraryFolder = folderPath[0];
-                            console.log('[INFO] Library folder set to:', global.libraryFolder);
-                            mainWindow.webContents.send('library-folder-set', global.libraryFolder);
-                        } else {
-                            console.log('[INFO] Library folder selection canceled.');
-                        }
-                    },
-                },
-                {
-                    label: 'Load Database',
-                    click: async () => {
-                        await loadDatabase(mainWindow);
-                    },
-                },
-                
-                {
-                    label: 'Convert ODS to DB',
-                    click: async () => {
-                        const filePaths = dialog.showOpenDialogSync(mainWindow, {
-                            properties: ['openFile'],
-                            filters: [
-                                { name: 'Excel Files', extensions: ['ods'] },
-                                { name: 'All Files', extensions: ['*'] },
-                            ],
-                        });
-                
-                        if (filePaths && filePaths.length > 0) {
-                            const excelFile = filePaths[0];
-                            console.log('[INFO] Selected Excel file:', excelFile);
-                
-                            // Create a modal for "Creating Database"
-                            let progressWindow = new BrowserWindow({
-                                parent: mainWindow,
-                                modal: true,
-                                width: 400,
-                                height: 200,
-                                frame: false, // No title bar for the window
-                                resizable: false,
-                                webPreferences: {
-                                    nodeIntegration: true, // Enable Node.js integration if needed
-                                    contextIsolation: false, // Disable context isolation for simplicity
-                                },
-                            });
-                
-                            // Load an inline HTML page for the progress window
-                            progressWindow.loadURL(`data:text/html,
-                                <style>
-                                    body {
-                                        font-family: Arial, sans-serif;
-                                        text-align: center;
-                                        padding: 20px;
-                                    }
-                                    h1 { font-size: 18px; }
-                                </style>
-                                <h1>Creating Database...(approx 1 minute)</h1>
-                                <p>Please wait while the database is being created.</p>
-                            `);
-                
-                            try {
-                                // Dynamically import xlsConverter.mjs
-                                const { populateDatabase } = await import('./xlsConverter.mjs');
-                
-                                const libraryFolder = appConfig.libraryFolder;
-                                if (!libraryFolder || typeof libraryFolder !== 'string' || !fs.existsSync(libraryFolder)) {
-                                    console.error('[ERROR] Invalid library folder:', libraryFolder);
-                                    throw new Error('Library folder is not set or does not exist.');
-                                }
-                                console.log('[DEBUG] Using libraryFolder:', libraryFolder);
-                
-                                const sheetIndex = 4;
-                                const dbPath = await populateDatabase(excelFile, sheetIndex, libraryFolder);
-                
-                                // Close the "Creating Database" window before showing the success dialog
-                                if (progressWindow) {
-                                    progressWindow.close();
-                                    progressWindow = null; // Cleanup reference
-                                }
-                
-                                // Show success dialog
-                                dialog.showMessageBoxSync(mainWindow, {
-                                    type: 'info',
-                                    title: 'Conversion Successful',
-                                    message: `The Excel file was successfully converted and saved to the database at:\n${dbPath}`,
-                                });
-                
-                                console.log('[INFO] Database conversion complete, exported to:', dbPath);
-                            } catch (error) {
-                                console.error('[ERROR] Failed to convert database:', error.message);
-                
-                                // Close the "Creating Database" window before showing the error dialog
-                                if (progressWindow) {
-                                    progressWindow.close();
-                                    progressWindow = null; // Cleanup reference
-                                }
-                
-                                // Show error dialog
-                                dialog.showMessageBoxSync(mainWindow, {
-                                    type: 'error',
-                                    title: 'Conversion Failed',
-                                    message: `An error occurred: ${error.message}`,
-                                });
-                            }
-                        } else {
-                            console.log('[INFO] No file selected.');
-                        }
-                    },
-                }, 
-                {
-                    label: 'Check for Updates',
-                    click: async () => {
-                        await checkForUpdates(currentVersion);
-                    },
-                },
-
-                { role: 'quit' },
-            ],
-        },
-        {
-            label: 'View',
-            submenu: [
-                {
-                    label: 'Toggle Developer Tools',
-                    accelerator: 'Ctrl+Shift+I', // Shortcut key
-                    click: () => {
-                        mainWindow.webContents.toggleDevTools();
-                    },
-                },
-            ],
-        },
-    ]);
-
-    Menu.setApplicationMenu(menu);
-});
-
-async function loadDatabase(mainWindow) {
-    console.log('[INFO] Initiating database load process.');
-
-    const dbPathResult = dialog.showOpenDialogSync(mainWindow, {
-        properties: ['openFile'],
-        title: 'Select Database File',
-        filters: [
-            { name: 'SQLite Databases', extensions: ['db'] },
-            { name: 'All Files', extensions: ['*'] },
-        ],
-    });
-
-    if (dbPathResult && dbPathResult.length > 0) {
-        const selectedDbPath = dbPathResult[0];
-        console.log('[INFO] Database loaded:', selectedDbPath);
-
-        // Update the global `dbPath`
-        dbPath = selectedDbPath;
-
-        // Save to `appConfig` and persist to config.json
-        appConfig.lastDatabase = selectedDbPath;
-        saveConfig();
-        console.log('[INFO] lastDatabase updated in config:', appConfig.lastDatabase);
-
-        // Notify renderer process about the loaded database
-        console.log('[DEBUG] Sending database-loaded event to renderer.');
-        mainWindow.webContents.send('database-loaded', selectedDbPath);
-    } else {
-        console.log('[INFO] Database selection canceled.');
-    }
-}
-
-async function checkForUpdates(currentVersion) {
-    const updateUrl = 'https://api.github.com/repos/Summit60/Odysee_2A3D_File_Manager/releases/latest';
-
-    try {
-        console.log('[INFO] Checking for updates...');
-        console.log(`[DEBUG] CurrentVersion Passed to checkForUpdates: ${currentVersion}`);
-
-        const response = await axios.get(updateUrl);
-        console.log('[DEBUG] GitHub API Response:', response.data);
-
-        const latestRelease = response.data;
-
-        if (!latestRelease || !latestRelease.tag_name) {
-            throw new Error('Unable to determine the latest version from GitHub.');
-        }
-
-        const latestVersion = latestRelease.tag_name.replace(/^v/, ''); // Remove 'v' prefix
-        console.log(`[INFO] Current version: ${currentVersion}, Latest version: ${latestVersion}`);
-
-        if (!currentVersion || !latestVersion) {
-            throw new Error(
-                `Invalid version(s) detected. CurrentVersion: ${currentVersion}, LatestVersion: ${latestVersion}`
-            );
-        }
-
-        const comparisonResult = compareVersions(currentVersion, latestVersion);
-
-        if (comparisonResult === 0) {
-            console.log('[INFO] Application is up to date.');
-            dialog.showMessageBox({
-                type: 'info',
-                title: 'Up to Date',
-                message: `Your application is up to date! Current version: ${currentVersion}`,
-            });
-        } else if (comparisonResult < 0) {
-            console.log(`[INFO] Update available: Current (${currentVersion}) < Latest (${latestVersion})`);
-            const choice = dialog.showMessageBoxSync({
-                type: 'question',
-                buttons: ['Download', 'Cancel'],
-                title: 'Update Available',
-                message: `A new version is available: ${latestVersion}\n\nDo you want to download it?`,
-            });
-
-            if (choice === 0) {
-                shell.openExternal('https://github.com/Summit60/Odysee_2A3D_File_Manager/releases');
-            }
+        const folder = await showLibrarySelectionWindow();
+        if (folder) {
+            libraryFolder = folder;
+            appConfig.libraryFolder = folder;
+            saveConfig();
+            console.log('[INFO] Library folder set to:', folder);
         } else {
-            console.log(`[INFO] Newer version installed: Current (${currentVersion}) > Latest (${latestVersion})`);
-            dialog.showMessageBox({
-                type: 'info',
-                title: 'Newer Version Installed',
-                message: `You have a newer version (${currentVersion}) than the latest release on GitHub (${latestVersion}).`,
-            });
+            console.error('[ERROR] No library folder selected. Exiting application.');
+            app.quit();
         }
-    } catch (error) {
-        console.error('[ERROR] Failed to check for updates:', error.message);
-        dialog.showMessageBox({
-            type: 'error',
-            title: 'Update Check Failed',
-            message: `Failed to check for updates. Please try again later.\n\nError: ${error.message}`,
+    } else {
+        libraryFolder = appConfig.libraryFolder;
+        console.log('[INFO] Library folder exists:', libraryFolder);
+    }
+}
+
+function showLibrarySelectionWindow() {
+    return new Promise((resolve) => {
+        const selectionWindow = new BrowserWindow({
+            width: 600,
+            height: 400,
+            title: 'Select Library Folder',
+            resizable: false,
+            webPreferences: {
+                nodeIntegration: true,
+                contextIsolation: false,
+            },
         });
+
+        // Load HTML content for the selection window
+        selectionWindow.loadURL(`data:text/html,
+            <html>
+            <head>
+                <style>
+                    body {
+                        font-family: Arial, sans-serif;
+                        margin: 0;
+                        padding: 20px;
+                        display: flex;
+                        flex-direction: column;
+                        justify-content: center;
+                        align-items: center;
+                        text-align: center;
+                        overflow-wrap: break-word;
+                    }
+                    h2 {
+                        margin-bottom: 20px;
+                    }
+                    p {
+                        max-width: 90%;
+                        margin: 20px 0;
+                        line-height: 1;
+                    }
+                    button {
+                        padding: 10px 20px;
+                        font-size: 16px;
+                        cursor: pointer;
+                    }
+                </style>
+            </head>
+            <body>
+                <h2>Odysee 2A3D Library Manager</h2>
+                <p>
+                    To proceed, you need to select a folder to use as your library. This folder 
+                    will store all of your Treasures as well as database files used in the application. you
+                    can change this later in the 'file' menu. Happy Sailing!
+                </p>
+                <p>
+                - Summit_60
+                </p>
+                <button id="select-folder">Select Folder</button>
+                <script>
+                    const { ipcRenderer } = require('electron');
+                    document.getElementById('select-folder').addEventListener('click', async () => {
+                        const folder = await ipcRenderer.invoke('select-library-folder');
+                        ipcRenderer.send('library-folder-selected', folder);
+                    });
+                </script>
+            </body>
+            </html>
+        `);
+
+        // Handle folder selection from the dialog
+        ipcMain.handle('select-library-folder', async () => {
+            const result = dialog.showOpenDialogSync(selectionWindow, {
+                properties: ['openDirectory'],
+                title: 'Select Library Folder',
+            });
+            return result ? result[0] : null;
+        });
+
+        // Save the selected folder and close the selection window
+        ipcMain.once('library-folder-selected', (event, folder) => {
+            selectionWindow.close();
+            resolve(folder); // Resolve the promise with the selected folder
+        });
+    });
+}
+
+// Function to ensure database structure
+function ensureDatabaseStructure(db) {
+    return new Promise((resolve, reject) => {
+        db.run(
+            `CREATE TABLE IF NOT EXISTS Claims (
+                File_Name TEXT,
+                Alt_File_Name TEXT,
+                File_Claim_ID TEXT PRIMARY KEY,
+                File_URL TEXT,
+                Alt_File_URL TEXT,
+                File_Size INTEGER,
+                Dev_Name TEXT,
+                Dev_Claim_ID TEXT,
+                Release_Date TEXT,
+                Media_Type TEXT,
+                Description TEXT,
+                Thumbnail_URL TEXT,
+                File_Path TEXT
+            )`,
+            (err) => {
+                if (err) {
+                    console.error('[ERROR] Failed to ensure database structure:', err);
+                    reject(err);
+                } else {
+                    console.log('[INFO] Database structure ensured.');
+                    resolve();
+                }
+            }
+        );
+    });
+}
+
+// Utility function for cleanup
+function cleanupFolders(fileFolder, developerFolder) {
+    if (fs.existsSync(fileFolder) && fs.readdirSync(fileFolder).length === 0) {
+        fs.rmdirSync(fileFolder);
+        console.log('[INFO] Cleaned up empty file folder:', fileFolder);
+    }
+
+    if (fs.existsSync(developerFolder) && fs.readdirSync(developerFolder).length === 0) {
+        fs.rmdirSync(developerFolder);
+        console.log('[INFO] Cleaned up empty developer folder:', developerFolder);
     }
 }
 
-function compareVersions(version1, version2) {
-    const normalizeVersion = (version) =>
-        version.split('.').map((part) => parseInt(part, 10) || 0);
-
-    const [v1, v2] = [normalizeVersion(version1), normalizeVersion(version2)];
-
-    for (let i = 0; i < Math.max(v1.length, v2.length); i++) {
-        const num1 = v1[i] || 0; // Treat missing parts as 0
-        const num2 = v2[i] || 0;
-
-        if (num1 > num2) return 1; // version1 is newer
-        if (num1 < num2) return -1; // version2 is newer
-    }
-    return 0; // Versions are equal
-}
+//////////////IPC Handlers//////////////
 
 ipcMain.handle('getDownloadedFilesForDeveloper', async (event, developerName) => {
     if (!libraryFolder || !fs.existsSync(libraryFolder)) {
@@ -858,22 +691,30 @@ ipcMain.handle('fetch-files', async (event, devName) => {
     });
 });
 
-
-
 ipcMain.handle('fetch-all-files', async () => {
-    const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY); // Use the loaded database
+    console.log('[DEBUG] fetch-all-files invoked.');
+    console.log('[DEBUG] Current dbPath:', dbPath);
+
+    if (!dbPath || typeof dbPath !== 'string' || !fs.existsSync(dbPath)) {
+        console.error('[ERROR] Invalid or missing database path in fetch-all-files:', dbPath);
+        throw new Error('Database path is invalid or missing. Please set a valid database.');
+    }
+
+    const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY);
     return new Promise((resolve, reject) => {
         db.all(`SELECT * FROM Claims`, (err, rows) => {
             if (err) {
-                console.error('[ERROR] Failed to fetch files from the loaded database:', err);
+                console.error('[ERROR] Failed to fetch files from the database:', err);
                 reject(err);
             } else {
-                console.log('[INFO] Retrieved files from the loaded database.');
+                console.log('[INFO] Retrieved files from the database.');
                 resolve(rows);
             }
         });
+        db.close();
     });
 });
+
 
 ipcMain.handle('fetch-downloaded-file', async (event, fileName) => {
     if (!libraryFolder || !fs.existsSync(libraryFolder)) {
@@ -931,29 +772,15 @@ ipcMain.handle('open-folder', async (event, folderPath) => {
     }
 });
 
-/**
- * Handles application exit when all windows are closed.
- */
-app.on('window-all-closed', () => {
-    console.log('[INFO] All windows closed. Exiting application.');
-    if (process.platform !== 'darwin') {
-        app.quit();
-    }
-});
-
-// Ensure proper cleanup on app quit
-app.on('quit', () => {
-    console.log('[INFO] App is quitting...');
-    // Perform any necessary cleanup here (e.g., closing database connections)
-});
-
-/**
- * Handles application reactivation on macOS when no windows are open.
- */
-app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-        console.log('[INFO] Activating new browser window.');
-        mainWindow = new BrowserWindow();
+ipcMain.handle('log-to-file', async (event, message) => {
+    const logFilePath = path.join(app.getPath('userData'), 'app.log');
+    const timestamp = new Date().toISOString();
+    const logMessage = `[${timestamp}] ${message}\n`;
+    try {
+        fs.appendFileSync(logFilePath, logMessage, 'utf-8');
+        console.log(logMessage.trim()); // Also log to console for debugging
+    } catch (error) {
+        console.error('[ERROR] Failed to write to log file:', error.message);
     }
 });
 
@@ -1119,8 +946,68 @@ ipcMain.handle('fetch-files-by-developer', async (event, developerName) => {
     });
 });
 
-// Handle file download
-const activeProcesses = new Map(); // Track active download processes by file name
+ipcMain.handle('fetch-downloaded-count', async (event, devName) => {
+    const dbPath = path.join(libraryFolder, 'downloaded.db');
+    const query = devName === 'ALL'
+        ? `SELECT COUNT(*) as downloadedCount FROM Claims WHERE File_Path IS NOT NULL`
+        : `SELECT COUNT(*) as downloadedCount FROM Claims WHERE Dev_Name = ? AND File_Path IS NOT NULL`;
+
+    return new Promise((resolve, reject) => {
+        const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY);
+        db.get(query, devName === 'ALL' ? [] : [devName], (err, row) => {
+            if (err) {
+                console.error('[ERROR] Failed to fetch downloaded count:', err);
+                reject(err);
+            } else {
+                resolve(row.downloadedCount || 0);
+            }
+            db.close();
+        });
+    });
+});
+
+ipcMain.handle('check-multiple-file-statuses', async (event, fileNames) => {
+    if (!libraryFolder || !fs.existsSync(libraryFolder)) {
+        console.error('[ERROR] Library folder is not set or does not exist.');
+        throw new Error('Library folder is not set or does not exist.');
+    }
+
+    const downloadedDbPath = path.join(libraryFolder, 'downloaded.db');
+    console.log('[DEBUG] Checking file statuses in downloaded.db at:', downloadedDbPath);
+
+    if (!fs.existsSync(downloadedDbPath)) {
+        console.error('[ERROR] downloaded.db does not exist:', downloadedDbPath);
+        return {};
+    }
+
+    return new Promise((resolve, reject) => {
+        const db = new sqlite3.Database(downloadedDbPath, sqlite3.OPEN_READONLY, (err) => {
+            if (err) {
+                console.error('[ERROR] Failed to open downloaded.db:', err.message);
+                return reject(err);
+            }
+        });
+
+        // Prepare the query for multiple file names
+        const placeholders = fileNames.map(() => '?').join(',');
+        const query = `SELECT File_Name FROM Claims WHERE File_Name IN (${placeholders})`;
+
+        db.all(query, fileNames, (err, rows) => {
+            if (err) {
+                console.error('[ERROR] Failed to query downloaded.db:', err.message);
+                reject(err);
+            } else {
+                // Map file names to existence status
+                const statuses = fileNames.reduce((acc, fileName) => {
+                    acc[fileName] = rows.some((row) => row.File_Name === fileName);
+                    return acc;
+                }, {});
+                resolve(statuses);
+            }
+            db.close();
+        });
+    });
+});
 
 ipcMain.handle('download-file', async (event, file) => {
     console.log('[DEBUG] download-file called with:', file);
@@ -1305,23 +1192,6 @@ ipcMain.handle('download-file', async (event, file) => {
     }
 });
 
-
-
-
-// Utility function for cleanup
-function cleanupFolders(fileFolder, developerFolder) {
-    if (fs.existsSync(fileFolder) && fs.readdirSync(fileFolder).length === 0) {
-        fs.rmdirSync(fileFolder);
-        console.log('[INFO] Cleaned up empty file folder:', fileFolder);
-    }
-
-    if (fs.existsSync(developerFolder) && fs.readdirSync(developerFolder).length === 0) {
-        fs.rmdirSync(developerFolder);
-        console.log('[INFO] Cleaned up empty developer folder:', developerFolder);
-    }
-}
-
-
 // IPC for killing active processes (for cancellation)
 ipcMain.handle('kill-active-processes', async () => {
     console.log('[DEBUG] Killing active processes...');
@@ -1337,8 +1207,6 @@ ipcMain.handle('kill-active-processes', async () => {
         global.activeProcesses = [];
     }
 });
-
-
 
 ipcMain.handle('fetch-downloaded-files', async () => {
     if (!libraryFolder || !fs.existsSync(libraryFolder)) {
@@ -1377,99 +1245,234 @@ ipcMain.handle('fetch-downloaded-files', async () => {
     });
 });
 
-// Function to ensure database structure
-function ensureDatabaseStructure(db) {
-    return new Promise((resolve, reject) => {
-        db.run(
-            `CREATE TABLE IF NOT EXISTS Claims (
-                File_Name TEXT,
-                Alt_File_Name TEXT,
-                File_Claim_ID TEXT PRIMARY KEY,
-                File_URL TEXT,
-                Alt_File_URL TEXT,
-                File_Size INTEGER,
-                Dev_Name TEXT,
-                Dev_Claim_ID TEXT,
-                Release_Date TEXT,
-                Media_Type TEXT,
-                Description TEXT,
-                Thumbnail_URL TEXT,
-                File_Path TEXT
-            )`,
-            (err) => {
-                if (err) {
-                    console.error('[ERROR] Failed to ensure database structure:', err);
-                    reject(err);
-                } else {
-                    console.log('[INFO] Database structure ensured.');
-                    resolve();
-                }
-            }
-        );
-    });
-}
+//////////////Menu Initialization//////////////
 
-ipcMain.handle('fetch-downloaded-count', async (event, devName) => {
-    const dbPath = path.join(libraryFolder, 'downloaded.db');
-    const query = devName === 'ALL'
-        ? `SELECT COUNT(*) as downloadedCount FROM Claims WHERE File_Path IS NOT NULL`
-        : `SELECT COUNT(*) as downloadedCount FROM Claims WHERE Dev_Name = ? AND File_Path IS NOT NULL`;
+const createAppMenu = (mainWindow) => {
+    const menuTemplate = [
+        {
+            label: 'File',
+            submenu: [
+                {
+                    label: 'Set Library Folder',
+                    click: async () => {
+                        const folderPath = dialog.showOpenDialogSync({
+                            properties: ['openDirectory'],
+                        });
 
-    return new Promise((resolve, reject) => {
-        const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY);
-        db.get(query, devName === 'ALL' ? [] : [devName], (err, row) => {
-            if (err) {
-                console.error('[ERROR] Failed to fetch downloaded count:', err);
-                reject(err);
-            } else {
-                resolve(row.downloadedCount || 0);
-            }
-            db.close();
-        });
-    });
-});
+                        if (folderPath && folderPath.length > 0) {
+                            global.libraryFolder = folderPath[0];
+                            console.log('[INFO] Library folder set to:', global.libraryFolder);
+                            mainWindow.webContents.send('library-folder-set', global.libraryFolder);
+                        } else {
+                            console.log('[INFO] Library folder selection canceled.');
+                        }
+                    },
+                },
+                {
+                    label: 'Load Database',
+                    click: async () => {
+                        await loadDatabase(mainWindow);
+                    },
+                },
+                {
+                    label: 'Convert ODS to DB',
+                    click: async () => {
+                        const filePaths = dialog.showOpenDialogSync(mainWindow, {
+                            properties: ['openFile'],
+                            filters: [
+                                { name: 'Excel Files', extensions: ['ods'] },
+                                { name: 'All Files', extensions: ['*'] },
+                            ],
+                        });
 
-ipcMain.handle('check-multiple-file-statuses', async (event, fileNames) => {
-    if (!libraryFolder || !fs.existsSync(libraryFolder)) {
-        console.error('[ERROR] Library folder is not set or does not exist.');
-        throw new Error('Library folder is not set or does not exist.');
-    }
+                        if (filePaths && filePaths.length > 0) {
+                            const excelFile = filePaths[0];
+                            console.log('[INFO] Selected Excel file:', excelFile);
+
+                            let progressWindow = new BrowserWindow({
+                                parent: mainWindow,
+                                modal: true,
+                                width: 400,
+                                height: 200,
+                                frame: false,
+                                resizable: false,
+                                webPreferences: {
+                                    nodeIntegration: true,
+                                    contextIsolation: false,
+                                },
+                            });
+
+                            progressWindow.loadURL(`data:text/html,
+                                <style>
+                                    body {
+                                        font-family: Arial, sans-serif;
+                                        text-align: center;
+                                        padding: 20px;
+                                    }
+                                    h1 { font-size: 18px; }
+                                </style>
+                                <h1>Creating Database...(approx 1 minute)</h1>
+                                <p>Please wait while the database is being created.</p>
+                            `);
+
+                            try {
+                                const { populateDatabase } = await import('./xlsConverter.mjs');
+
+                                const libraryFolder = appConfig.libraryFolder;
+                                if (!libraryFolder || typeof libraryFolder !== 'string' || !fs.existsSync(libraryFolder)) {
+                                    throw new Error('Library folder is not set or does not exist.');
+                                }
+
+                                const sheetIndex = 4;
+                                const dbPath = await populateDatabase(excelFile, sheetIndex, libraryFolder);
+
+                                if (progressWindow) {
+                                    progressWindow.close();
+                                    progressWindow = null;
+                                }
+
+                                dialog.showMessageBoxSync(mainWindow, {
+                                    type: 'info',
+                                    title: 'Conversion Successful',
+                                    message: `The Excel file was successfully converted and saved to the database at:\n${dbPath}`,
+                                });
+                            } catch (error) {
+                                console.error('[ERROR] Failed to convert database:', error.message);
+
+                                if (progressWindow) {
+                                    progressWindow.close();
+                                    progressWindow = null;
+                                }
+
+                                dialog.showMessageBoxSync(mainWindow, {
+                                    type: 'error',
+                                    title: 'Conversion Failed',
+                                    message: `An error occurred: ${error.message}`,
+                                });
+                            }
+                        } else {
+                            console.log('[INFO] No file selected.');
+                        }
+                    },
+                },
+                {
+                    label: 'Check for Updates',
+                    click: async () => {
+                        await checkForUpdates(currentVersion);
+                    },
+                },
+                { role: 'quit' },
+            ],
+        },
+        {
+            label: 'View',
+            submenu: [
+                {
+                    label: 'Toggle Developer Tools',
+                    accelerator: 'Ctrl+Shift+I',
+                    click: () => {
+                        mainWindow.webContents.toggleDevTools();
+                    },
+                },
+            ],
+        },
+    ];
+
+    Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate));
+};
+
+//////////////Application Lifecycle Events//////////////
+
+//Creates the main application window and sets up initial configurations.
+app.on('ready', async () => {
+    console.log('[INFO] Electron app is ready.');
+
+    await ensureLibraryFolder(mainWindow);
 
     const downloadedDbPath = path.join(libraryFolder, 'downloaded.db');
-    console.log('[DEBUG] Checking file statuses in downloaded.db at:', downloadedDbPath);
-
     if (!fs.existsSync(downloadedDbPath)) {
-        console.error('[ERROR] downloaded.db does not exist:', downloadedDbPath);
-        return {};
+        console.log('[INFO] Creating new database...');
+        const db = new sqlite3.Database(downloadedDbPath);
+        try {
+            await ensureDatabaseStructure(db);
+            console.log('[INFO] Database structure ensured.');
+        } catch (error) {
+            console.error('[ERROR] Failed to ensure database structure:', error.message);
+            app.quit();
+        } finally {
+            db.close();
+        }
     }
 
-    return new Promise((resolve, reject) => {
-        const db = new sqlite3.Database(downloadedDbPath, sqlite3.OPEN_READONLY, (err) => {
-            if (err) {
-                console.error('[ERROR] Failed to open downloaded.db:', err.message);
-                return reject(err);
-            }
-        });
-
-        // Prepare the query for multiple file names
-        const placeholders = fileNames.map(() => '?').join(',');
-        const query = `SELECT File_Name FROM Claims WHERE File_Name IN (${placeholders})`;
-
-        db.all(query, fileNames, (err, rows) => {
-            if (err) {
-                console.error('[ERROR] Failed to query downloaded.db:', err.message);
-                reject(err);
-            } else {
-                // Map file names to existence status
-                const statuses = fileNames.reduce((acc, fileName) => {
-                    acc[fileName] = rows.some((row) => row.File_Name === fileName);
-                    return acc;
-                }, {});
-                resolve(statuses);
-            }
-            db.close();
-        });
+    mainWindow = new BrowserWindow({
+        width: 1400,
+        height: 1000,
+        icon: path.join(appPath, 'assets', 'icon.ico'),
+        webPreferences: {
+            preload: path.join(appPath, 'preload.js'),
+            nodeIntegration: true,
+            contextIsolation: true,
+            devTools: true,
+        },
     });
+
+    mainWindow.loadURL(`file://${path.join(__dirname, '/index.html')}`);
+
+    try {
+        console.log('[DEBUG] About to call ensureLbrynetRunning...');
+        await ensureLbrynetRunning(mainWindow);
+    } catch (error) {
+        console.error('[ERROR] Failed to start lbrynet:', error.message);
+    }
+
+    // Create the menu
+    createAppMenu(mainWindow);
 });
+
+
+//Handles application exit when all windows are closed.
+app.on('window-all-closed', () => {
+    console.log('[INFO] All windows closed. Exiting application.');
+    if (process.platform !== 'darwin') {
+        app.quit();
+    }
+});
+
+// Ensure proper cleanup on app quit
+app.on('quit', () => {
+    console.log('[INFO] App is quitting...');
+    // Perform any necessary cleanup here (e.g., closing database connections)
+});
+
+// Handles application reactivation on macOS when no windows are open.
+app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+        console.log('[INFO] Activating new browser window.');
+        mainWindow = new BrowserWindow();
+    }
+});
+
+/////////////////other//////////////////
+
+// Ensure the config file exists
+if (!fs.existsSync(configPath)) {
+    console.log('[INFO] Config file not found. Creating a default one at:', configPath);
+    fs.writeFileSync(configPath, JSON.stringify(defaultConfig, null, 2));
+}
+
+// Set library folder from config if available
+if (appConfig.libraryFolder) {
+    libraryFolder = appConfig.libraryFolder;
+    global.libraryFolder = appConfig.libraryFolder; // Ensure global variable is updated
+    console.log(`[INFO] Restored library folder: ${libraryFolder}`);
+} else {
+    console.error('[ERROR] Library folder not found in configuration. Prompt user to set it.');
+}
+
+// Set database path from config if available
+if (appConfig.lastDatabase) {
+    dbPath = appConfig.lastDatabase;
+    console.log(`[INFO] Restored last database: ${dbPath}`);
+}
 
 module.exports = { logToFile };

@@ -90,7 +90,7 @@ function setupDatabase(dbPath) {
     return db;
 }
 
-// Read Odysee links and metadata from an XLS file
+// Read Odysee links and metadata from an ODS file
 function readOdyseeLinksAndDate(fileName, sheetIndex) {
     const workbook = xlsx.readFile(fileName, { raw: true, cellDates: true });
     const sheetName = workbook.SheetNames[sheetIndex - 1];
@@ -100,11 +100,15 @@ function readOdyseeLinksAndDate(fileName, sheetIndex) {
     // Get links from Column B
     const links = rows.slice(1).map(row => row[1]?.trim()).filter(Boolean);
 
-    // Get date from Column K, Row 2
-    const dateCell = rows[1][10];
-    const dbDate = dateCell instanceof Date
-        ? dateCell.toISOString().slice(0, 10).replace(/-/g, '')
-        : dateCell?.replace(/-/g, '');
+    // Get the newest date from Column K
+    const dateCells = rows.slice(1).map(row => row[10]).filter(Boolean); // Column K (index 10)
+    const newestDate = dateCells
+        .map(cell => (cell instanceof Date ? cell : new Date(cell))) // Convert to Date objects
+        .filter(date => !isNaN(date)) // Filter valid dates
+        .reduce((latest, current) => (current > latest ? current : latest), new Date(0)); // Find the newest date
+
+    const dbDate = newestDate.toISOString().slice(0, 10).replace(/-/g, ''); // Format as YYYYMMDD
+
     return { links, dbDate };
 }
 

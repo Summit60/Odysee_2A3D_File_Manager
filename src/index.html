@@ -91,25 +91,19 @@
             <input type="text" id="search-developers" placeholder="Search Developers">
             <div id="developer-list" class="scrollable"></div>
         </div>
-
+    
         <!-- Resizable Divider -->
         <div id="divider"></div>
-
+    
         <!-- File Section -->
         <div id="file-section">
-            <input type="text" id="search-files" placeholder="Search Files">
+            <!-- Search Bar with Results Counter -->
+            <div class="search-container">
+                <input type="text" id="search-files" placeholder="Search Files" class="search-bar">
+                <span id="total-results-counter" class="results-counter">Results: 0</span>
+            </div>
             <div id="file-list" class="scrollable"></div>
-        </div>
-    </div>    
-
-    <!-- Popup for Viewing File Details -->
-    <div id="popup-overlay">
-        <div id="popup-content">
-            <button id="popup-close">Close</button>
-            <img id="popup-image" src="" alt="File Thumbnail">
-            <h2 id="popup-title"></h2>
-            <p id="popup-description"></p>
-        </div>
+        </div>                          
     </div>
 
     <div id="status-modal" style="display: flex;">
@@ -120,7 +114,111 @@
             <p id="status-blocksBehind" class="progress-text">Blocks Remaining: 0</p>
         </div>
     </div>
+
+    <div id="popup-modal" class="modal hidden">
+        <div class="modal-content">
+            <h3>Popup Title</h3>
+            <p>Popup content goes here...</p>
+            <button id="close-popup" class="close-btn">Close</button>
+        </div>
+    </div>
     
+
+            <!-- Success Modal Template -->
+    <div id="success-modal" class="modal hidden">
+        <div class="modal-content">
+            <h3>Downloads Complete</h3>
+            <p>All files were downloaded successfully!</p>
+            <button id="close-success-modal" class="close-btn">Close</button>
+        </div>
+    </div>
+
+    <!-- Failure Modal Template -->
+    <div id="failure-modal" class="modal hidden">
+        <div class="modal-content">
+            <h3>Downloads Complete</h3>
+            <p>
+                Some downloads failed: "Unfortunately, sometimes the database picks up files that no longer exist. 
+                It may be worth navigating the seas to find the treasure you seek." - Summit60
+            </p>
+            <p>The following files could not be downloaded:</p>
+            <ul id="failed-files-list"></ul>
+            <button id="close-failure-modal" class="close-btn">Close</button>
+        </div>
+    </div>
+
+        <!-- Delete Confirmation Modal -->
+        <div id="delete-confirmation-modal" class="modal hidden">
+            <div class="modal-content">
+                <h3>Confirm Deletion</h3>
+                <p id="delete-confirmation-message"></p>
+                <div class="button-container">
+                    <button id="confirm-delete-btn" class="close-btn">Delete</button>
+                    <button id="cancel-delete-btn" class="close-btn">Cancel</button>
+                </div>
+            </div>
+        </div>      
+
+        <!-- General Alert Modal -->
+    <div id="alert-modal" class="modal hidden">
+        <div class="modal-content">
+            <h3 id="alert-modal-title">Alert</h3>
+            <p id="alert-modal-message"></p>
+            <button id="alert-modal-close-btn" class="close-btn">Close</button>
+        </div>
+    </div>
+
+    <!-- file listing template -->
+    <template id="file-item-template">
+        <div class="file-item" data-file-name="">
+            <img class="file-thumbnail" src="default-thumbnail.png" alt="File Thumbnail" />
+            <div>
+                <b class="file-name"></b>
+                <p class="file-developer"></p>
+                <p>
+                    <span class="file-size"></span>
+                    <span class="file-status-badge"></span>
+                </p>
+                <p class="file-release-date"></p>
+                <p class="file-description"></p>
+                <div class="button-container">
+                    <button class="view-btn">View File</button>
+                    <button class="delete-btn">Delete</button>
+                    <button class="select-btn">Select</button>
+                    <button class="download-btn">Download</button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <div id="popup-overlay" class="popup-overlay hidden">
+        <div class="popup-content">
+            <button id="popup-close" class="popup-close-btn">&times;</button>
+            <img id="popup-image" class="popup-image" src="" alt="File Thumbnail" />
+            <h3 id="popup-title">File Name</h3>
+            <p id="popup-description">File description goes here...</p>
+        </div>
+    </div>             
+
+    <template id="cancel-dialog-template">
+        <div id="cancel-dialog" class="modal">
+            <h3>Downloads Canceled</h3>
+            <p>All ongoing downloads have been canceled.</p>
+            <button id="close-cancel-dialog" class="close-btn">Close</button>
+        </div>
+    </template>    
+
+    <div id="cancel-dialog" class="modal hidden">
+        <div class="modal-content">
+            <h3>Downloads Canceled</h3>
+            <p>All ongoing downloads have been canceled.</p>
+            <button class="close-btn">Close</button>
+        </div>
+    </div>
+
+    <template id="no-files-template">
+        <p>No files found matching the criteria.</p>
+    </template>
     
          <!-- Include renderer.js -->
     <script src="renderer.js"></script>
