@@ -29,7 +29,8 @@ contextBridge.exposeInMainWorld(('api'), {
         basename: (filepath) => path.basename(filepath),
         extname: (filepath) => path.extname(filepath),
     },
-    
+    selectLibraryFolder: () => ipcRenderer.invoke('select-library-folder'),
+    notifyLibraryFolderSelected: (folder) => ipcRenderer.send('library-folder-selected', folder),
     getAllDownloadedCounts: async (developerNames) => {return ipcRenderer.invoke('get-All-Downloaded-Counts', developerNames);},
     killActiveProcesses: () => ipcRenderer.invoke('kill-active-processes'),
     checkMultipleFileStatuses: (fileNames) => ipcRenderer.invoke('check-multiple-file-statuses', fileNames),
@@ -47,7 +48,6 @@ contextBridge.exposeInMainWorld(('api'), {
     downloadFile: (file) => ipcRenderer.invoke('download-file', file),
     viewFile: (filePath) => ipcRenderer.invoke('view-file', filePath),
     deleteFile: (file) => ipcRenderer.invoke('delete-file', file),
-    onAlert: (callback) => ipcRenderer.on('alert', (event, message) => callback(message)),
     getDownloadedFilePath: (fileName) => ipcRenderer.invoke('getDownloadedFilePath', fileName),
     getConfig: () => ipcRenderer.invoke('get-config'),
     getDownloadedFilesForDeveloper: (developerName) => ipcRenderer.invoke('getDownloadedFilesForDeveloper', developerName),

@@ -1,6 +1,6 @@
 {
     "name": "odysee-2a3d-file-manager",
-    "version": "1.1.11",
+    "version": "1.1.12",
     "description": "A file manager for Odysee data, handling downloads, database management, and XLS to SQLite conversion.",
     "main": "src/main.js",
     "scripts": {
