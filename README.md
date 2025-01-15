@@ -41,6 +41,8 @@ Get Involved
 
 Thank you for your support, and happy browsing!
 
+
+
 Update 1.1.12
 
 -GUI unification(popups are same style now)
@@ -50,6 +52,8 @@ Update 1.1.12
 -Search bar now states total results
 
 -code organization and refactors(mainly GUI)
+
+
 
 Update 1.1.11!
 
@@ -64,6 +68,9 @@ ensures devs with same name have separate listings
 -Version check
 added an automatic version check once sync is complete with prompt to download
 added check for update option in the file menu
+
+
+
 
 
 
