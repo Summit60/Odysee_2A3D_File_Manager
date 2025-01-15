@@ -41,6 +41,30 @@ Get Involved
 
 Thank you for your support, and happy browsing!
 
+Update 1.1.12
+
+-GUI unification(popups are same style now)
+
+-Revamp of search function for better reliability and includes description in search
+
+-Search bar now states total results
+
+-code organization and refactors(mainly GUI)
+
+Update 1.1.11!
+
+thank you everyone for all of the support! here is a quick fix to the conversion system. I had inadvertently changed the extension of my list from black lotus so I believed it was a .xls file but now it will be able to go straight from odd sea to the app. also added a version check to ensure you have the latest and greatest!
+
+Change log
+-XLS to Database is now ODS to Database
+this was a mistake on my part this should make a much simpler workflow of converting new spreadsheets
+cleans up duplicate files
+ensures devs with same name have separate listings
+
+-Version check
+added an automatic version check once sync is complete with prompt to download
+added check for update option in the file menu
+
 
 
 Todo list:
@@ -58,8 +82,6 @@ Todo list:
 
 -Limit concurrent downloads by user settings(default 100) integrate file check to be complete. download failure modal "should" update as is with failed downloads but will need to look into it
   
-
-
 
 Complete
 
