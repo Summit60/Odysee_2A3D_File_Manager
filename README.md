@@ -126,10 +126,18 @@ Todo list:
   
 
 Complete
--Limit concurrent downloads by user settings(default 100) integrate file check to be complete. download failure modal "should" update as is with failed downloads but will need to look into it
--Search folder for existing files. could be done as long as the existing file name matches the one listed in the database. these files and their path would be downloaded.db optionally they could be moved from their existing location into the folder structure maintained by the program. 
-#1 priority is limiting concurrent downloads as it full sends it currently bogging down your computer
+-Limit concurrent downloads by user settings(default 100) integrate file check to be complete. download failure modal "should" update as is with failed downloads 
+   but will need to look into it
+
+-Search folder for existing files. could be done as long as the existing file name matches the one listed in the database. these files and their path would be   
+   downloaded.db optionally they could be moved from their existing location into the folder structure maintained by the program. 
+
+-#1 priority is limiting concurrent downloads as it full sends it currently bogging down your computer
+
 -Database Comparison with identifiers I'd a file is new or dev has new files
+
 -code refactor/organization (highly needed) lots of dead or redundant code
+
 -Gui style unification. many popups use differing styles of popups
+
 -Add results to search (in progress)
