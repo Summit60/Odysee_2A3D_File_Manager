@@ -1,3 +1,8 @@
+Quick update. it's come to my attention that people would like to donate so with some help ive set up a BTC wallet for anyone who would like to. obviously not required as this boy is open-source! but it is greatly appreciated. 
+
+BTC Wallet: bc1q806lw0z7lnrv0zc7ztg4k9vdv72npv7ma3nd6r
+
+
 ### Introducing A New File Manager and Browser!!
 
 ![Screenshot 2025-01-13 004129](https://github.com/user-attachments/assets/a5a85930-1195-4a17-8f2f-91a8b8baeabb)
