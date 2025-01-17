@@ -1,5 +1,7 @@
 ### Dotantions
-It was brought up that people would like to donate and with the help of an awesome donator I was able to set up a BTC wallet for donations. If this doesnt work for you and you want to support me Ive created a paetreon(with some very silly teirs be warned lol) whether its monthly or just a one off as a tip I have as little as 3 dollars
+It was brought up that people would like to donate and with the help of an awesome donator I was able to set up a BTC wallet for donations. If this doesnt work for you and you want to support me Ive created a paetreon. whether its monthly or just a one off as a 'tip' I have as little as 3 dollars and up.
+
+https://www.patreon.com/c/Summt_60
 
 BTC Wallet: bc1q806lw0z7lnrv0zc7ztg4k9vdv72npv7ma3nd6r
 
