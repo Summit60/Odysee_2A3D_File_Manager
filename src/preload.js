@@ -2,26 +2,19 @@ const { contextBridge, ipcRenderer } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
-// Determine the app base path (packaged vs. development)
 const appPath = process.resourcesPath || __dirname;
 
-// Expose methods to the renderer process
-contextBridge.exposeInMainWorld(('api'), {
-    logToFile: (message) => {
-        try {
-            const logFile = path.join(appPath, 'app.log');
-            const logMessage = `[${new Date().toISOString()}] ${message}\n`;
-            fs.appendFileSync(logFile, logMessage);
-        } catch (error) {
-            console.error('[ERROR] Failed to write to log file:', error.message);
-        }
-    },
+contextBridge.exposeInMainWorld('api', {
+    onReloadData: (callback) => {
+        ipcRenderer.on('reload-data', callback);},
     invoke: (channel, ...args) => ipcRenderer.invoke(channel, ...args),
+    removeListener: (channel, callback) => ipcRenderer.removeListener(channel, callback),
     on: (channel, callback) => {
         ipcRenderer.on(channel, (event, ...args) => callback(...args));
     },
     emit: (channel, ...args) => ipcRenderer.send(channel, ...args),
 
+    // Path utilities
     path: {
         join: (...args) => path.join(...args),
         resolve: (...args) => path.resolve(...args),
@@ -29,39 +22,53 @@ contextBridge.exposeInMainWorld(('api'), {
         basename: (filepath) => path.basename(filepath),
         extname: (filepath) => path.extname(filepath),
     },
+
+    // Core IPC handlers
     selectLibraryFolder: () => ipcRenderer.invoke('select-library-folder'),
     notifyLibraryFolderSelected: (folder) => ipcRenderer.send('library-folder-selected', folder),
-    getAllDownloadedCounts: async (developerNames) => {return ipcRenderer.invoke('get-All-Downloaded-Counts', developerNames);},
-    killActiveProcesses: () => ipcRenderer.invoke('kill-active-processes'),
-    checkMultipleFileStatuses: (fileNames) => ipcRenderer.invoke('check-multiple-file-statuses', fileNames),
     getLibraryFolder: () => ipcRenderer.invoke('getLibraryFolder'),
-    executeCommand: (command) => ipcRenderer.invoke('executeCommand', { command }),
-    loadDatabase: () => ipcRenderer.invoke('load-database'),
-    fetchDevelopers: (dbPath) => ipcRenderer.invoke('fetch-developers', dbPath),
-    fetchFilesByDeveloper: (devName) => ipcRenderer.invoke('fetch-files-by-developer', devName),
-    fetchDownloadedCount: (devName) => ipcRenderer.invoke('fetch-downloaded-count', devName),
-    fetchFiles: (dbPath, devName) => ipcRenderer.invoke('fetch-files', dbPath, devName),
-    fetchAllFiles: () => ipcRenderer.invoke('fetch-all-files'),
-    fetchDownloadedFiles: () => ipcRenderer.invoke('fetch-downloaded-files'),
-    fetchDownloadedFile: (fileName) => ipcRenderer.invoke('fetch-downloaded-file', fileName),
-    setLibraryFolder: () => ipcRenderer.invoke('set-library-folder'),
-    downloadFile: (file) => ipcRenderer.invoke('download-file', file),
-    viewFile: (filePath) => ipcRenderer.invoke('view-file', filePath),
-    deleteFile: (file) => ipcRenderer.invoke('delete-file', file),
-    getDownloadedFilePath: (fileName) => ipcRenderer.invoke('getDownloadedFilePath', fileName),
-    getConfig: () => ipcRenderer.invoke('get-config'),
-    getDownloadedFilesForDeveloper: (developerName) => ipcRenderer.invoke('getDownloadedFilesForDeveloper', developerName),
-    openFolder: (folderPath) => ipcRenderer.invoke('open-folder', folderPath),
-    onDatabaseLoaded: (callback) => ipcRenderer.on('database-loaded', (event, dbPath) => callback(dbPath)),
+    cleanTempFolders: async () => ipcRenderer.invoke('clean-temp-folders'),
+    markFileAsNotNew: (fileClaimId) => ipcRenderer.invoke('mark-file-as-not-new', fileClaimId),
+    getNewFileCountForDeveloper: (developerName) => ipcRenderer.invoke('get-new-file-count', developerName),
+    logToFile: (message) => ipcRenderer.invoke('log-to-file', message),
+    
+    // Query database handlers
+    fetchDevelopers: () => ipcRenderer.invoke('fetch-developers'),
+    fetchAllFiles: () => ipcRenderer.invoke('query-database', 'fetchAllFiles'),
+    fetchDownloadedFiles: () => ipcRenderer.invoke('query-database', 'fetchDownloadedFiles'),
+    fetchDownloadedCount: (devName) => ipcRenderer.invoke('query-database', 'fetchFilesByDeveloper', { devName }),
+    fetchFilesByDeveloper: (devName) => ipcRenderer.invoke('query-database', 'fetchFilesByDeveloper', { devName }),
+    searchFiles: (searchTerm) => ipcRenderer.invoke('query-database', 'searchFiles', { searchTerm }),
+    checkMultipleFileStatuses: (fileNames) => ipcRenderer.invoke('check-multiple-file-statuses', fileNames),
+    onDatabaseLoaded: (callback) => ipcRenderer.on('database-loaded', callback),
+    getAllDownloadedCounts: (developerNames) => ipcRenderer.invoke('getAllDownloadedCounts', developerNames),
+    getDownloadedFilesForDeveloper: (developerName) => ipcRenderer.invoke('get-downloaded-files-for-developer', developerName),
+    getAllDeveloperCounts: () => ipcRenderer.invoke('getAllDeveloperCounts'),
 
-    // Bridging Trigger-counter
+    // File management
+    fetchDownloadedFile: (fileName) => ipcRenderer.invoke('fetch-downloaded-file', fileName),
+    deleteFile: (filePath) => ipcRenderer.invoke('delete-file', filePath),
+    openFolder: (folderPath) => ipcRenderer.invoke('open-folder', folderPath),
+    viewFile: (filePath) => ipcRenderer.invoke('view-file', filePath),
+    downloadFile: (file) => ipcRenderer.invoke('download-file', file),
+    killActiveProcesses: () => ipcRenderer.invoke('kill-active-processes'),
+    selectFolder: () => ipcRenderer.invoke('select-folder'),
+    scanFolder: (folderPath) => ipcRenderer.invoke('scan-folder', folderPath),
+    processScannedFiles: (files, action) => ipcRenderer.invoke('process-scanned-files', { files, action }),
+    getLibraryFolder: () => ipcRenderer.invoke('get-library-folder'),
+
+    // Config and settings
+    getConfig: () => ipcRenderer.invoke('get-config'),
+    saveSetting: (key, value) => ipcRenderer.send('save-setting', { key, value }),
+    getSetting: (key) => ipcRenderer.invoke('get-setting', key),
+
+    // Event bridging
     onTriggerCounter: (callback) => {
         ipcRenderer.on('Trigger-counter', (event, data) => {
             console.log(`[DEBUG] Trigger-counter bridged to renderer: fileName=${data.fileName}, status=${data.status}`);
-            callback(data); // Pass the data object directly to the callback
+            callback(data);
         });
     },
-    
 });
 
 contextBridge.exposeInMainWorld('lbrynet', {

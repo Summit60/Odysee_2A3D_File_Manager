@@ -219,6 +219,28 @@
     <template id="no-files-template">
         <p>No files found matching the criteria.</p>
     </template>
+
+    <div id="settings-modal" class="modal hidden">
+        <div class="modal-content">
+            <h2>Settings</h2>
+            <label for="max-downloads">Max Concurrent Downloads:</label>
+            <input type="number" id="max-downloads" min="1" />
+            <div class="modal-actions">
+                <button id="save-settings">Save</button>
+                <button id="close-settings">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="scan-results-modal" class="modal hidden">
+        <div class="modal-content">
+            <h2>Scan Results</h2>
+            <div id="scan-results-container" class="results-container"></div>
+            <button id="move-files-btn">Move Files to Library</button>
+            <button id="keep-files-btn">Keep Files in Location</button>
+        </div>
+    </div>
+
     
          <!-- Include renderer.js -->
     <script src="renderer.js"></script>

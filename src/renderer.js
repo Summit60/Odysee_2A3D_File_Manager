@@ -1,5 +1,6 @@
 //////////////Imports and Initialization//////////////
-console.log('[INFO] renderer.js loaded and running')
+
+
 
 const divider = document.getElementById('divider');
 const developerSection = document.getElementById('developer-section');
@@ -9,6 +10,9 @@ const fileList = document.getElementById('file-list');
 const fileCount = document.getElementById('file-count');
 const fileSize = document.getElementById('file-size');
 const searchDevelopersInput = document.getElementById('search-developers');
+if (!searchDevelopersInput) {
+
+}
 const searchFilesInput = document.getElementById('search-files');
 
 const toggleViewModeButton = document.getElementById('toggle-view-mode');
@@ -25,119 +29,152 @@ let cancelDownloads = false; // Track cancel state
 let currentDeveloper = null; // Tracks the selected developer
 let preloadedFiles = [];
 
-//////////////Seearch//////////////
-let files = []; // Global variable to store all files
+//////////////Search//////////////
+let allFiles = []; // Full dataset
+let files = [];    // Current filtered dataset
 
 async function initializeFiles() {
     try {
-        console.log('[INFO] Initializing files...');
-        files = await window.api.fetchAllFiles(); // Fetch all files
+        window.api.logToFile('[INFO] Initializing files...');
+        
+        // Fetch files from the database
+        const rawFiles = await window.api.fetchAllFiles();
+        if (!rawFiles || rawFiles.length === 0) {
+            console.warn('[WARNING] No files found in the database.');
+            allFiles = [];
+            files = [];
+            refreshFileList();
+            return;
+        }
 
-        // Cache downloaded statuses
-        const fileNames = files.map((file) => file.File_Name);
+        // Map files and their statuses
+        const fileNames = rawFiles.map(file => file.File_Name);
         const fileStatuses = await window.api.checkMultipleFileStatuses(fileNames);
 
-        files.forEach((file) => {
-            file.isDownloaded = !!fileStatuses[file.File_Name];
-        });
+        allFiles = rawFiles.map(file => ({
+            ...file,
+            isDownloaded: !!fileStatuses[file.File_Name], // Assign the downloaded status
+        }));
 
-        console.log(`[INFO] Files initialized: ${files.length}`);
-        console.log('[DEBUG] Sample file structure:', files.slice(0, 10)); // Log first 10 files
-        refreshFileList(); // Display all files initially
+        files = [...allFiles];
+        refreshFileList();
     } catch (error) {
-        console.error('[ERROR] Failed to initialize files:', error);
+        console.error('[ERROR] Failed to initialize files:', error.message);
     }
 }
 
-// Call this during app startup
-initializeFiles();
+async function initializeDevelopers() {
+    try {
+        window.api.logToFile('[INFO] Initializing developers...');
+        const developers = await window.api.fetchDevelopers();
+
+        if (!developers || developers.length === 0) {
+            console.warn('[WARNING] No developers found in the database.');
+            loadDevelopers([]); // Call with an empty array to clear the UI
+            return;
+        }
+
+        loadDevelopers(developers);
+    } catch (error) {
+        console.error('[ERROR] Failed to initialize developers:', error.message);
+    }
+}
+
 
 // Add a debounced listener for search input
 if (!searchFilesInput.dataset.listenerAdded) {
     const debouncedRefreshFileList = debounce(() => {
-        console.log('[DEBUG] Search input event triggered.');
-        refreshFileList(); // Dynamically refresh the file list
-    }, 300);
+        window.api.logToFile('[DEBUG] Search input event triggered.');
+        refreshFileList();
+    }, 300); // Adjust debounce delay as needed
 
     searchFilesInput.addEventListener('input', debouncedRefreshFileList);
-    searchFilesInput.dataset.listenerAdded = true;
+    searchFilesInput.dataset.listenerAdded = true; // Mark the listener as added
+}
+
+if (!searchDevelopersInput.dataset.listenerAdded) {
+    const debouncedDeveloperSearch = debounce(refreshDeveloperList, 300);
+    searchDevelopersInput.addEventListener('input', debouncedDeveloperSearch);
+    searchDevelopersInput.dataset.listenerAdded = true; // Mark listener as added
+    window.api.logToFile('[DEBUG] Developer search listener added.');
 }
 
 if (selectedDeveloperId && selectedDeveloperId !== 'all') {
     filteredFiles = filteredFiles.filter((file) => file.Dev_Id.trim().toLowerCase() === selectedDeveloperId.trim().toLowerCase());
-    console.log(`[DEBUG] Filtered by developer "${selectedDeveloperId}": ${filteredFiles.length} files.`);
+    window.api.logToFile(`[DEBUG] Filtered by developer "${selectedDeveloperId}": ${filteredFiles.length} files.`);
 }
 
 async function refreshFileList() {
     try {
-        console.log('[DEBUG] Refreshing file list...');
-        let filteredFiles = [...files]; // Start with all files
+        window.api.logToFile('[DEBUG] Refreshing file list...');
 
-        // Filter by selected developer
-        if (selectedDeveloperId && selectedDeveloperId !== 'all') {
-            filteredFiles = filteredFiles.filter((file) => file.Dev_Name.trim().toLowerCase() === selectedDeveloperId.trim().toLowerCase());
-            console.log(`[DEBUG] Filtered by developer "${selectedDeveloperId}": ${filteredFiles.length} files.`);
-        }
+        // Start with the full dataset
+        let filteredFiles = [...files];
+        window.api.logToFile(`[DEBUG] Initial file count: ${filteredFiles.length}`);
 
-        // Apply "Downloaded Only" filter
+        // Apply the "Downloaded Only" filter if enabled
         if (isViewingDownloaded) {
-            filteredFiles = filteredFiles.filter((file) => file.isDownloaded);
-            console.log(`[DEBUG] Filtered by "Downloaded Only": ${filteredFiles.length} files.`);
+            filteredFiles = filteredFiles.filter(file => file.isDownloaded);
+            window.api.logToFile(`[DEBUG] Filtered by "Downloaded Only": ${filteredFiles.length} files.`);
         }
 
-        // Apply search query filter
+        // Apply the search query filter
         const searchQuery = searchFilesInput.value.trim().toLowerCase();
         if (searchQuery) {
-            filteredFiles = filteredFiles.filter((file) =>
+            filteredFiles = filteredFiles.filter(file =>
                 file.File_Name.toLowerCase().includes(searchQuery) ||
                 (file.Description && file.Description.toLowerCase().includes(searchQuery))
             );
-            console.log(`[DEBUG] Filtered by search query "${searchQuery}": ${filteredFiles.length} files.`);
+            window.api.logToFile(`[DEBUG] Filtered by search query "${searchQuery}": ${filteredFiles.length} files.`);
         }
+
+        // Deduplicate files by File_Claim_ID
+        filteredFiles = Array.from(new Map(filteredFiles.map(file => [file.File_Claim_ID, file])).values());
+        window.api.logToFile(`[DEBUG] Unique files after deduplication: ${filteredFiles.length}`);
 
         // Update the results counter
-        const resultsCounter = document.getElementById('total-results-counter');
-        if (resultsCounter) {
-            resultsCounter.textContent = `Results: ${filteredFiles.length}`;
-        } else {
-            console.error('[ERROR] Results counter element not found in the DOM.');
-        }
+        updateResultsCounter(filteredFiles.length);
 
-        // Handle no matching files
-        if (!filteredFiles.length) {
+        // Handle the case of no matching files
+        if (filteredFiles.length === 0) {
             fileList.innerHTML = '<p>No files found matching the criteria.</p>';
-            console.log('[INFO] No files found matching the criteria.');
+            window.api.logToFile('[INFO] No files found matching the criteria.');
             return;
         }
 
-        // Load the filtered files
-        console.log(`[DEBUG] Final file count for display: ${filteredFiles.length}`);
+        // Load and display the filtered files
+        window.api.logToFile(`[DEBUG] Final file count for display: ${filteredFiles.length}`);
         await loadFiles(filteredFiles);
     } catch (error) {
-        console.error('[ERROR] Failed to refresh file list:', error);
+        console.error('[ERROR] Failed to refresh file list:', error.message);
     }
 }
 
 function refreshDeveloperList() {
     const developerItems = document.querySelectorAll('.developer-item');
+    const searchQuery = searchDevelopersInput?.value?.trim().toLowerCase() || ''; // Ensure valid query
 
     developerItems.forEach((devItem) => {
         const devName = devItem.dataset.devName;
-        const downloadedCount = parseInt(devItem.querySelector('.downloaded-column').textContent, 10) || 0;
+
+        // Calculate downloaded count dynamically
+        const downloadedCount = allFiles.filter(file => 
+            file.Dev_Name === devName && file.isDownloaded
+        ).length;
 
         // Check if the developer matches the toggle and search criteria
         const matchesToggle = !isViewingDownloaded || downloadedCount > 0;
-        const matchesSearch = devName.toLowerCase().includes(searchDevelopersInput.value.toLowerCase());
+        const matchesSearch = devName.toLowerCase().includes(searchQuery);
 
         devItem.style.display = matchesToggle && matchesSearch ? '' : 'none';
     });
 
-    console.log('[INFO] Developer list refreshed based on toggle and search.');
+    window.api.logToFile('[INFO] Developer list refreshed based on toggle and search.');
 }
 
-function handleDeveloperSelection(developerName) {
-    selectedDeveloperId = developerName === 'ALL' ? 'all' : developerName; // Use 'all' for "ALL" developer
-    console.log(`[INFO] Developer selected: ${developerName}`);
+async function handleDeveloperSelection(developerName) {
+    selectedDeveloperId = developerName === 'ALL' ? 'all' : developerName;
+    window.api.logToFile(`[INFO] Developer selected: ${developerName}`);
 
     // Highlight the selected developer in the list
     const developerItems = document.querySelectorAll('.developer-item');
@@ -145,8 +182,30 @@ function handleDeveloperSelection(developerName) {
         item.classList.toggle('selected', item.dataset.devName === developerName);
     });
 
-    // Refresh the file list based on the new selection
-    refreshFileList();
+    // Filter files based on the selected developer
+    try {
+        if (selectedDeveloperId === 'all') {
+            files = [...allFiles]; // Reset to all files
+        } else {
+            files = allFiles.filter((file) => 
+                file.Dev_Name.trim().toLowerCase() === selectedDeveloperId.trim().toLowerCase()
+            );
+        }
+
+        refreshFileList(); // Refresh the file list after filtering
+    } catch (error) {
+        console.error(`[ERROR] Failed to filter files for developer: ${developerName}`, error);
+    }
+}
+
+function updateResultsCounter(count) {
+    const resultsCounter = document.getElementById('total-results-counter');
+    if (resultsCounter) {
+        resultsCounter.textContent = `Results: ${count}`;
+        window.api.logToFile(`[DEBUG] Results counter updated: ${count}`);
+    } else {
+        console.error('[ERROR] Results counter element not found in the DOM.');
+    }
 }
 
 // Debounce utility to limit frequent function calls
@@ -180,10 +239,6 @@ function renderDeveloperList(developers) {
 // Debounced functions for search
 const debouncedRefreshDeveloperList = debounce(refreshDeveloperList, 300);
 const debouncedRefreshFileList = debounce(refreshFileList, 300);
-
-// Attach event listeners
-searchDevelopersInput.addEventListener('input', debouncedRefreshDeveloperList);
-searchFilesInput.addEventListener('input', debouncedRefreshFileList);
 
 //////////////Event Handlers//////////////
 
@@ -237,7 +292,14 @@ document.addEventListener('mouseup', () => {
             },
             { once: true }
         );
-    }
+}
+
+window.api.on('reload-data', async () => {
+    window.api.logToFile('[INFO] Reloading data due to database update...');
+    await initializeFiles();
+    await initializeDevelopers();
+    window.api.logToFile('[INFO] Data reload completed.');
+});
 
 //////////////UI Management//////////////
 
@@ -259,34 +321,48 @@ function updateFileStats() {
     selectedCount.textContent = `Selected Files: ${selectedFiles.length}`;
     selectedSize.textContent = `Total Size: ${formattedSize}`;
 
-    console.log(`[INFO] Updated file stats: ${selectedFiles.length} files, ${totalSize} bytes.`);
+    window.api.logToFile(`[INFO] Updated file stats: ${selectedFiles.length} files, ${totalSize} bytes.`);
 }
 
 async function loadDevelopers(developers) {
+    window.api.logToFile('[DEBUG] Developers passed to loadDevelopers:', developers);
+
+    if (!developers || developers.length === 0) {
+        console.warn('[WARN] No developers found. Clearing developer list.');
+        document.getElementById('developer-list').innerHTML = '<p>No developers available.</p>';
+        return;
+    }
+
     const developerList = document.getElementById('developer-list');
     developerList.innerHTML = ''; // Clear existing entries
 
     const developerNames = developers.map((dev) => dev.Dev_Name);
     let totalFiles = developers.reduce((sum, dev) => sum + (dev.totalFiles || 0), 0);
 
-    // Fetch all downloaded counts in one API call
-    let downloadedCounts = {};
+    // Fetch all downloaded and new counts in one API call
+    let developerCounts = {};
     try {
-        downloadedCounts = await window.api.getAllDownloadedCounts(developerNames); // Batch fetch
+        developerCounts = await window.api.getAllDeveloperCounts(); // Fetch downloaded and new counts
     } catch (err) {
-        console.log(`[ERROR] Failed to fetch downloaded counts: ${err.message}`);
+        console.error(`[ERROR] Failed to fetch developer counts: ${err.message}`);
     }
 
     let totalDownloadedFiles = 0;
     const fragment = document.createDocumentFragment();
 
     developers.forEach((developer) => {
-        const downloadedCount = downloadedCounts[developer.Dev_Name] || 0;
+        const downloadedCount = developerCounts[developer.Dev_Name]?.downloaded || 0;
+        const newCount = developerCounts[developer.Dev_Name]?.new || 0;
         totalDownloadedFiles += downloadedCount;
 
         const devElement = document.createElement('div');
         devElement.classList.add('developer-item');
         devElement.dataset.devName = developer.Dev_Name;
+
+        // Highlight developers with new files
+        if (newCount > 0) {
+            devElement.classList.add('new-developer'); // Add a CSS class for styling new developers
+        }
 
         // Left: Name and Checkbox
         const leftDiv = document.createElement('div');
@@ -325,22 +401,28 @@ async function loadDevelopers(developers) {
 
         checkbox.addEventListener('change', async (e) => {
             e.stopImmediatePropagation();
-
+        
             if (e.target.checked) {
-                console.log(`[INFO] Selected developer: ${developer.Dev_Name}`);
+                window.api.logToFile(`[INFO] Selected developer: ${developer.Dev_Name}`);
                 const files = await window.api.fetchFilesByDeveloper(developer.Dev_Name);
-
-                selectedFiles.push(...files);
-                selectedFiles = [...new Map(selectedFiles.map(file => [file.File_Name, file])).values()];
-                console.log(`[INFO] Updated selected files:`, selectedFiles);
+        
+                // Filter for files where Downloaded = 0
+                const nonDownloadedFiles = files.filter(file => file.Downloaded === 0);
+        
+                selectedFiles.push(...nonDownloadedFiles);
+        
+                // Remove duplicates
+                selectedFiles = [...new Map(selectedFiles.map(file => [file.File_Claim_ID, file])).values()];
+                window.api.logToFile('[INFO] Updated selected files:', selectedFiles);
             } else {
-                console.log(`[INFO] Deselected developer: ${developer.Dev_Name}`);
-                selectedFiles = selectedFiles.filter((file) => file.Dev_Name !== developer.Dev_Name);
-                console.log(`[INFO] Updated selected files:`, selectedFiles);
+                window.api.logToFile(`[INFO] Deselected developer: ${developer.Dev_Name}`);
+                selectedFiles = selectedFiles.filter(file => file.Dev_Name !== developer.Dev_Name);
+                window.api.logToFile('[INFO] Updated selected files:', selectedFiles);
             }
-
+        
             updateFileStats(); // Update stats
         });
+        
 
         devElement.appendChild(leftDiv);
         devElement.appendChild(statsDiv);
@@ -388,33 +470,34 @@ async function loadDevelopers(developers) {
 
     // Add the click listener to the "ALL" developer element
     allDevElement.addEventListener('click', () => {
-        console.log('[INFO] "ALL" developer clicked.');
+        window.api.logToFile('[INFO] "ALL" developer clicked.');
         handleDeveloperSelection('ALL'); // Call the function to load all files
     });
 
     fragment.prepend(allDevElement);
 
-
     developerList.appendChild(fragment);
 
-    console.log('[INFO] Developers loaded into the UI.');
+    window.api.logToFile('[INFO] Developers loaded into the UI.');
 
-    // Dynamically update columns when downloads complete
+    // Dynamically update columns when downloads or new status changes
     window.api.on('file-status-updated', ({ fileName, status, developerName }) => {
-        if (status === 'downloaded') {
-            // Update developer's downloaded count
+        if (developerName) {
             const developerDiv = document.querySelector(`[data-dev-name="${developerName}"]`);
             if (developerDiv) {
+                // Update downloaded count
                 const downloadedColumn = developerDiv.querySelector('.downloaded-column');
-                if (downloadedColumn) {
+                if (downloadedColumn && status === 'downloaded') {
                     downloadedColumn.textContent = parseInt(downloadedColumn.textContent, 10) + 1;
                 }
-            }
 
-            // Update "ALL" downloaded count
-            const allDownloadedColumn = allDevElement.querySelector('.downloaded-column');
-            if (allDownloadedColumn) {
-                allDownloadedColumn.textContent = parseInt(allDownloadedColumn.textContent, 10) + 1;
+                // Remove highlight if no new files are left
+                if (status === 'not-new') {
+                    const newFilesCount = developerCounts[developerName]?.new || 0;
+                    if (newFilesCount <= 0) {
+                        developerDiv.classList.remove('new-developer');
+                    }
+                }
             }
         }
     });
@@ -434,7 +517,7 @@ async function loadFiles(files) {
     try {
         const fileNames = files.map((file) => file.File_Name);
         fileStatuses = await window.api.checkMultipleFileStatuses(fileNames); // Use batch query
-        console.log('[DEBUG] Batch file statuses fetched:', fileStatuses);
+        window.api.logToFile('[DEBUG] Batch file statuses fetched:', fileStatuses);
     } catch (error) {
         console.error('[ERROR] Failed to fetch file statuses in bulk:', error.message);
     }
@@ -443,8 +526,12 @@ async function loadFiles(files) {
     let filteredFiles = [...files];
     if (isViewingDownloaded) {
         filteredFiles = filteredFiles.filter((file) => fileStatuses[file.File_Name]);
-        console.log(`[INFO] Filtered for "Downloaded Only": ${filteredFiles.length} files.`);
+        window.api.logToFile(`[INFO] Filtered for "Downloaded Only": ${filteredFiles.length} files.`);
     }
+
+    // Deduplicate filteredFiles based on File_Name
+    filteredFiles = Array.from(new Map(filteredFiles.map(file => [file.File_Name, file])).values());
+    window.api.logToFile(`[DEBUG] Deduplicated filtered files: ${filteredFiles.length}`);
 
     // Handle no matching files
     if (!filteredFiles.length) {
@@ -453,43 +540,107 @@ async function loadFiles(files) {
         return;
     }
 
-    console.log(`[DEBUG] Total files to display: ${filteredFiles.length}`);
+    window.api.logToFile(`[DEBUG] Total files to display: ${filteredFiles.length}`);
 
     // Function to create a file element from the template
     const createFileElement = (file) => {
+        window.api.logToFile('[DEBUG] Creating file element for:', file);
+    
+        // Clone the template
         const template = document.getElementById('file-item-template').content.cloneNode(true);
-
-        // Get references to template elements
+    
         const fileElement = template.querySelector('.file-item');
-        const thumbnail = template.querySelector('.file-thumbnail');
-        const fileName = template.querySelector('.file-name');
-        const developer = template.querySelector('.file-developer');
-        const fileSize = template.querySelector('.file-size');
-        const statusBadge = template.querySelector('.file-status-badge');
-        const releaseDate = template.querySelector('.file-release-date');
-        const description = template.querySelector('.file-description');
-
-        // Populate template with data
+        if (!fileElement) {
+            console.error('[ERROR] Failed to find file-item in the template.');
+            return null;
+        }
+    
+        // Debugging: Check if buttons exist in the cloned template
+        const selectBtn = fileElement.querySelector('.select-btn');
+        const viewBtn = fileElement.querySelector('.view-btn');
+        const deleteBtn = fileElement.querySelector('.delete-btn');
+        const downloadBtn = fileElement.querySelector('.download-btn');
+    
+        viewBtn?.addEventListener('click', () => { window.api.logToFile(`View ${file.File_Name}`); });
+        deleteBtn?.addEventListener('click', () => { window.api.logToFile(`Delete ${file.File_Name}`); });
+        selectBtn?.addEventListener('click', () => { window.api.logToFile(`Select ${file.File_Name}`); });
+        downloadBtn?.addEventListener('click', () => { window.api.logToFile(`Download ${file.File_Name}`); });
+    
+        if (!selectBtn || !viewBtn || !deleteBtn || !downloadBtn) {
+            console.error('[ERROR] One or more buttons are missing in the file-item template.');
+        }
+    
+        // Set file data
         fileElement.dataset.fileName = file.File_Name.trim();
-        thumbnail.src = file.Thumbnail_URL || 'default-thumbnail.png';
-        thumbnail.alt = file.File_Name;
-        fileName.textContent = file.File_Name;
-        developer.textContent = `by ${file.Dev_Name}`;
-        fileSize.textContent = `${(file.File_Size / 1024 / 1024).toFixed(2)} MB`;
-        statusBadge.textContent = fileStatuses[file.File_Name] ? '✔ Downloaded' : '✖ Not Downloaded';
-        statusBadge.classList.add(fileStatuses[file.File_Name] ? 'downloaded' : 'not-downloaded');
-        releaseDate.textContent = file.Release_Date;
-        description.textContent = `${file.Description.substring(0, 100)}...`;
-
-        // Add file actions
-        addFileActions(fileElement, file);
-
-        // Attach double-click event to open the popup
-        fileElement.addEventListener('dblclick', () => {
-            console.log(`[DEBUG] File double-clicked: ${file.File_Name}`);
+        fileElement.dataset.devName = file.Dev_Name.trim();
+    
+        template.querySelector('.file-thumbnail').src = file.Thumbnail_URL || 'default-thumbnail.png';
+        template.querySelector('.file-name').textContent = file.File_Name;
+        template.querySelector('.file-developer').textContent = `by ${file.Dev_Name}`;
+        template.querySelector('.file-size').textContent = `${(file.File_Size / 1024 / 1024).toFixed(2)} MB`;
+    
+        const statusBadge = template.querySelector('.file-status-badge');
+    
+        // Set badge based on the file's status
+        if (file.New === 1) {
+            statusBadge.textContent = 'NEW!!';
+            statusBadge.style.color = 'white';
+            statusBadge.style.backgroundColor = 'purple';
+            fileElement.classList.add('new');
+        } else if (fileStatuses[file.File_Name]) {
+            statusBadge.textContent = '✔ Downloaded';
+            statusBadge.style.color = 'white';
+            statusBadge.style.backgroundColor = 'green';
+            fileElement.classList.add('downloaded');
+        } else {
+            statusBadge.textContent = '✖ Not Downloaded';
+            statusBadge.style.color = 'white';
+            statusBadge.style.backgroundColor = 'grey';
+        }
+    
+        template.querySelector('.file-release-date').textContent = file.Release_Date;
+        template.querySelector('.file-description').textContent = `${file.Description.substring(0, 100)}...`;
+    
+        // Add double-click listener for popup
+        fileElement.addEventListener('dblclick', async () => {
+            window.api.logToFile(`[DEBUG] File double-clicked: ${file.File_Name}`);
             openPopup(file);
         });
 
+        fileElement.addEventListener('click', async () => {
+            window.api.logToFile(`[DEBUG] File clicked: ${file.File_Name}`);
+        
+            // If the file is new, mark it as not new
+            if (file.New === 1) {
+                try {
+                    await window.api.markFileAsNotNew(file.File_Claim_ID);
+                    file.New = 0;
+        
+                    // Update the status badge to "Not Downloaded"
+                    statusBadge.textContent = '✖ Not Downloaded';
+                    statusBadge.style.color = 'white';
+                    statusBadge.style.backgroundColor = 'grey';
+                    fileElement.classList.remove('new');
+        
+                    window.api.logToFile(`[INFO] File marked as not new: ${file.File_Claim_ID}`);
+        
+                    // Check if the developer still has any new files
+                    const developerDiv = document.querySelector(`[data-dev-name="${file.Dev_Name}"]`);
+                    if (developerDiv) {
+                        const newFilesCount = await window.api.getNewFileCountForDeveloper(file.Dev_Name);
+                        if (newFilesCount <= 0) {
+                            window.api.logToFile(`[INFO] No new files for developer: ${file.Dev_Name}. Removing highlight.`);
+                            developerDiv.classList.remove('new-developer');
+                        }
+                    }
+                } catch (error) {
+                    console.error('[ERROR] Failed to update file status:', error.message);
+                }
+            }
+        });                
+    
+        // Attach actions to the file element
+        addFileActions(fileElement, file);
         return fileElement;
     };
 
@@ -497,7 +648,10 @@ async function loadFiles(files) {
     const loadBatch = (batch) => {
         const fragment = document.createDocumentFragment();
         for (const file of batch) {
-            if (visibleFiles.has(file.File_Name)) continue; // Skip if already visible
+            if (visibleFiles.has(file.File_Name)) {
+                window.api.logToFile(`[DEBUG] Skipping already visible file: ${file.File_Name}`);
+                continue; // Skip if already visible
+            }
 
             const fileElement = createFileElement(file);
             visibleFiles.set(file.File_Name, fileElement);
@@ -520,7 +674,7 @@ async function loadFiles(files) {
             const nextBatch = filteredFiles.slice(loadedCount, loadedCount + BATCH_SIZE);
             loadBatch(nextBatch);
             loadedCount += BATCH_SIZE;
-            console.log(`[DEBUG] Loaded ${loadedCount}/${filteredFiles.length} files.`);
+            window.api.logToFile(`[DEBUG] Loaded ${loadedCount}/${filteredFiles.length} files.`);
         }
     };
 
@@ -531,64 +685,45 @@ async function loadFiles(files) {
     fileList._scrollListener = onScroll;
     fileList.addEventListener('scroll', fileList._scrollListener);
 
-    console.log('[INFO] File list loaded.');
-}
-
-async function updateDeveloperList() {
-    const developerElements = document.querySelectorAll('.developer-item');
-
-    for (const devElement of developerElements) {
-        const developerName = devElement.dataset.devName; // Get developer name from dataset
-        try {
-            const downloadedCount = await window.api.invoke('getDownloadedFilesForDeveloper', developerName);
-            const downloadedColumn = devElement.querySelector('.downloaded-column');
-            downloadedColumn.textContent = downloadedCount;
-        } catch (err) {
-            console.log(`[ERROR] Failed to update downloaded count for developer: ${developerName}`, err);
-        }
-    }
+    window.api.logToFile('[INFO] File list loaded.');
 }
 
 async function updateDeveloperStats(devName) {
     try {
-        console.log(`[DEBUG] Updating stats for developer: ${devName}`);
-        
-        const isAllView = devName === 'ALL';
+        window.api.logToFile(`[DEBUG] Updating stats for developer: ${devName}`);
 
-        // Fetch total downloaded files for "ALL"
-        const downloadedCount = isAllView
-            ? await window.api.fetchDownloadedCount('ALL') // Special query for "ALL"
-            : await window.api.getDownloadedFilesForDeveloper(devName);
+        let downloadedCount = 0;
 
-        const developerRow = document.querySelector(`[data-dev-name="${devName}"]`);
+        if (devName === 'ALL') {
+            downloadedCount = await window.api.fetchDownloadedCount('ALL');
+            window.api.logToFile(`[INFO] Total downloaded count for "ALL": ${downloadedCount}`);
+        } else {
+            downloadedCount = await window.api.getDownloadedFilesForDeveloper(devName);
+            window.api.logToFile(`[INFO] Downloaded count for developer ${devName}: ${downloadedCount}`);
+        }
+
+        // Update the corresponding UI element
+        const selector = devName === 'ALL' ? '[data-dev-name="ALL"]' : `[data-dev-name="${devName}"]`;
+        const developerRow = document.querySelector(selector);
+
         if (developerRow) {
             const downloadedColumn = developerRow.querySelector('.downloaded-column');
             if (downloadedColumn) {
                 downloadedColumn.textContent = downloadedCount;
-                console.log(`[INFO] Updated download count for developer ${devName}: ${downloadedCount}`);
+                window.api.logToFile(`[INFO] Updated downloaded count for developer ${devName}: ${downloadedCount}`);
             } else {
-                console.log(`[ERROR] Downloaded column not found for developer: ${devName}`);
-            }
-        } else if (isAllView) {
-            // Special handling for "ALL"
-            const allRow = document.querySelector(`[data-dev-name="ALL"]`);
-            if (allRow) {
-                const downloadedColumn = allRow.querySelector('.downloaded-column');
-                if (downloadedColumn) {
-                    downloadedColumn.textContent = downloadedCount;
-                    console.log(`[INFO] Updated download count for "ALL": ${downloadedCount}`);
-                }
+                console.error('[ERROR] Downloaded column not found for developer:', devName);
             }
         } else {
-            console.log(`[ERROR] Developer row not found for developer: ${devName}`);
+            console.warn(`[WARN] Developer row not found for developer: ${devName}`);
         }
     } catch (err) {
-        console.log(`[ERROR] Failed to update stats for developer: ${devName}`, err);
+        console.error(`[ERROR] Failed to update stats for developer: ${devName}`, err);
     }
 }
 
 function openPopup(file) {
-    console.log('[DEBUG] openPopup called with:', file);
+    window.api.logToFile('[DEBUG] openPopup called with:', file);
 
     const popupOverlay = document.getElementById('popup-overlay');
     const popupImage = document.getElementById('popup-image');
@@ -606,17 +741,17 @@ function openPopup(file) {
     popupTitle.textContent = file.File_Name;
     popupDescription.textContent = file.Description;
 
-    console.log('[DEBUG] Popup content set.');
+    window.api.logToFile('[DEBUG] Popup content set.');
 
     // Show the popup
     popupOverlay.classList.remove('hidden');
-    console.log('[DEBUG] Popup displayed.');
+    window.api.logToFile('[DEBUG] Popup displayed.');
 
     // Close popup logic
     const closePopup = (e) => {
         if (e.target === popupOverlay || e.target === closeButton) {
             popupOverlay.classList.add('hidden');
-            console.log('[DEBUG] Popup closed.');
+            window.api.logToFile('[DEBUG] Popup closed.');
         }
     };
 
@@ -629,36 +764,19 @@ toggleViewModeButton.addEventListener('click', () => {
     isViewingDownloaded = !isViewingDownloaded; // Toggle the state
     toggleViewModeButton.textContent = isViewingDownloaded ? 'View All' : 'View Downloaded';
 
-    console.log(`[INFO] Toggled view mode: ${isViewingDownloaded ? 'Downloaded Only' : 'All Files'}`);
+    window.api.logToFile(`[INFO] Toggled view mode: ${isViewingDownloaded ? 'Downloaded Only' : 'All Files'}`);
     refreshFileList();; // Reapply filters
 });
 
 //////////////Download and Progress File Management//////////////
 
 function deleteFile(file) {
-    console.log(`[INFO] Deleting file: ${file.File_Name}`);
-}
-
-async function downloadFile(url, savePath) {
-    try {
-        const response = await axios.get(url, { responseType: 'stream' });
-        const writer = fs.createWriteStream(savePath);
-
-        response.data.pipe(writer);
-
-        return new Promise((resolve, reject) => {
-            writer.on('finish', resolve);
-            writer.on('error', reject);
-        });
-    } catch (error) {
-        console.log(`Failed to download file: ${error.message}`);
-        throw error;
-    }
+    window.api.logToFile(`[INFO] Deleting file: ${file.File_Name}`);
 }
 
 const initializeDownload = () => {
     document.getElementById('download-selected').addEventListener('click', async () => {
-        const maxConcurrentDownloads = 5;
+        const maxConcurrentDownloads = 2;
         const progressBar = document.getElementById('progress-bar');
         const progressStatus = document.getElementById('progress-status');
         const cancelButton = document.getElementById('cancel-downloads');
@@ -666,7 +784,7 @@ const initializeDownload = () => {
 
         if (totalFiles === 0) {
             showAlert('No files selected for download.');
-            console.log('[DEBUG] No files selected.');
+            window.api.logToFile('[DEBUG] No files selected.');
             return;
         }
 
@@ -689,7 +807,7 @@ const initializeDownload = () => {
             const percentage = ((processedFilesCount / totalFiles) * 100).toFixed(2);
             progressBar.value = processedFilesCount;
             progressStatus.textContent = `Progress: ${processedFilesCount}/${totalFiles} (${percentage}%)`;
-            console.log(`[DEBUG] Progress updated: ${processedFilesCount}/${totalFiles} (${percentage}%)`);
+            window.api.logToFile(`[DEBUG] Progress updated: ${processedFilesCount}/${totalFiles} (${percentage}%)`);
         };
 
         const cleanupIncompleteDownloads = () => {
@@ -698,28 +816,38 @@ const initializeDownload = () => {
                 const fileFolder = path.join(developerFolder, file.File_Name || 'UnknownFile');
                 if (fs.existsSync(fileFolder) && fs.readdirSync(fileFolder).length === 0) {
                     fs.rmdirSync(fileFolder);
-                    console.log('[INFO] Cleaned up incomplete file folder:', fileFolder);
+                    window.api.logToFile('[INFO] Cleaned up incomplete file folder:', fileFolder);
                 }
                 if (fs.existsSync(developerFolder) && fs.readdirSync(developerFolder).length === 0) {
                     fs.rmdirSync(developerFolder);
-                    console.log('[INFO] Cleaned up empty developer folder:', developerFolder);
+                    window.api.logToFile('[INFO] Cleaned up empty developer folder:', developerFolder);
                 }
             });
         };
 
         const cancelDownloadsImmediately = async () => {
             cancelDownloads = true;
-            console.log('[INFO] Cancelling downloads...');
+            window.api.logToFile('[INFO] Cancelling downloads...');
+        
+            // Kill active processes (if applicable)
             await window.api.killActiveProcesses(); // Custom function to kill all active processes
+        
+            // Clean up active downloads and queue
             activeDownloads = [];
             downloadQueue = [];
+        
+            // Cleanup incomplete downloads
             cleanupIncompleteDownloads();
+        
+            // Request main process to clean temp folders (_MEIxxxxx)
+            await window.api.cleanTempFolders();
         };
+        
 
         const removeExistingDialog = (dialogId) => {
             const existingDialog = document.getElementById(dialogId);
             if (existingDialog) {
-                console.log('[DEBUG] Removing existing dialog:', dialogId);
+                window.api.logToFile('[DEBUG] Removing existing dialog:', dialogId);
                 document.body.removeChild(existingDialog);
             }
         };        
@@ -738,7 +866,7 @@ const initializeDownload = () => {
                     'click',
                     () => {
                         successModal.classList.add('hidden');
-                        console.log('[DEBUG] Success modal closed.');
+                        window.api.logToFile('[DEBUG] Success modal closed.');
                     },
                     { once: true }
                 );
@@ -756,7 +884,7 @@ const initializeDownload = () => {
                     'click',
                     () => {
                         failureModal.classList.add('hidden');
-                        console.log('[DEBUG] Failure modal closed.');
+                        window.api.logToFile('[DEBUG] Failure modal closed.');
                         failedFiles = []; // Reset failed files
                     },
                     { once: true }
@@ -767,7 +895,7 @@ const initializeDownload = () => {
 
         const showCancelDialog = () => {
             const modal = document.getElementById('cancel-dialog');
-            console.log('[DEBUG] Modal:', modal);
+            window.api.logToFile('[DEBUG] Modal:', modal);
         
             if (!modal) {
                 console.error('[ERROR] Cancel dialog modal not found in the DOM.');
@@ -775,7 +903,7 @@ const initializeDownload = () => {
             }
         
             const closeBtn = modal.querySelector('.close-btn');
-            console.log('[DEBUG] Close Button:', closeBtn);
+            window.api.logToFile('[DEBUG] Close Button:', closeBtn);
         
             if (!closeBtn) {
                 console.error('[ERROR] Close button not found inside cancel dialog modal.');
@@ -790,7 +918,7 @@ const initializeDownload = () => {
                 'click',
                 () => {
                     modal.classList.add('hidden'); // Hide the modal
-                    console.log('[DEBUG] Cancel dialog closed.');
+                    window.api.logToFile('[DEBUG] Cancel dialog closed.');
                 },
                 { once: true } // Ensure the event listener is executed only once
             );
@@ -800,11 +928,11 @@ const initializeDownload = () => {
             const processedFilesCount = completedFiles.size + failedFiles.length;
         
             if (processedFilesCount === totalFiles) {
-                console.log(`[INFO] All files processed. ${failedFiles.length} failures.`);
+                window.api.logToFile(`[INFO] All files processed. ${failedFiles.length} failures.`);
         
                 // Clear the selectedFiles array
                 selectedFiles = [];
-                console.log('[DEBUG] Cleared selectedFiles array after processing. Current contents:', selectedFiles);
+                window.api.logToFile('[DEBUG] Cleared selectedFiles array after processing. Current contents:', selectedFiles);
         
                 // Reset the UI (if needed, e.g., buttons, progress, etc.)
                 updateFileStats(); // Recalculate stats for the top bar
@@ -816,60 +944,139 @@ const initializeDownload = () => {
         
 
         window.api.onTriggerCounter(({ fileName, status }) => {
-            console.log(`[DEBUG] Trigger-counter received in renderer: fileName=${fileName}, status=${status}`);
+            window.api.logToFile(`[DEBUG] Trigger-counter received in renderer: fileName=${fileName}, status=${status}`);
+            
+            // Locate the file element in the UI
+            const fileElement = Array.from(document.querySelectorAll('.file-item')).find(
+                (el) => el.dataset.fileName === fileName
+            );
         
+            // Update the badge based on status
+            if (fileElement) {
+                const statusBadge = fileElement.querySelector('.file-status-badge');
+                if (statusBadge) {
+                    if (status === 'downloaded') {
+                        // Update to "Downloaded"
+                        statusBadge.textContent = '✔ Downloaded';
+                        statusBadge.style.color = 'white';
+                        statusBadge.style.backgroundColor = 'green';
+                        fileElement.classList.add('downloaded');
+                    } else if (status === 'failed') {
+                        // Update to "Error"
+                        statusBadge.textContent = '✖ Error';
+                        statusBadge.style.color = 'white';
+                        statusBadge.style.backgroundColor = 'red';
+                        fileElement.classList.remove('downloaded');
+                    }
+                } else {
+                    console.warn(`[WARN] Status badge not found for file: ${fileName}`);
+                }
+            } else {
+                console.warn(`[WARN] File element not found in UI for: ${fileName}`);
+            }
+        
+            // Track the file based on its status
             if (status === 'downloaded') {
                 completedFiles.add(fileName);
+        
+                // Update the isDownloaded flag in the files array
+                const file = files.find(f => f.File_Name === fileName);
+                if (file) {
+                    file.isDownloaded = true;
+                    window.api.logToFile(`[INFO] Updated isDownloaded for: ${fileName}`);
+                } else {
+                    console.warn(`[WARN] File not found in memory for: ${fileName}`);
+                }
             } else if (status === 'failed') {
                 if (!failedFiles.some(f => f.File_Name === fileName)) {
                     const file = selectedFiles.find(f => f.File_Name === fileName);
                     if (file) {
                         failedFiles.push(file);
-                        console.log('[DEBUG] Failed file added to array:', failedFiles);
+                        window.api.logToFile('[DEBUG] Failed file added to array:', failedFiles);
                     }
                 }
             }
-            
+        
+            // Recalculate and update progress
             updateProgress();
             finalizeDownloads();
-        });       
+        });                           
 
-        const startDownload = async () => {
-            while (downloadQueue.length > 0 && activeDownloads.length < maxConcurrentDownloads) {
-                if (cancelDownloads) {
-                    console.log('[INFO] Download queue cleared due to cancellation.');
-                    downloadQueue.length = 0;
-                    return;
-                }
+        let isProcessing = false; // Ensure only one processQueue runs at a time
 
-                const file = downloadQueue.shift();
-                const downloadPromise = window.api
-                    .downloadFile(file)
-                    .then(response => {
-                        if (response.status === 'verified') {
-                            window.api.emit('Trigger-counter', { fileName: file.File_Name, status: 'downloaded' });
-                        } else {
-                            window.api.emit('Trigger-counter', { fileName: file.File_Name, status: 'failed' });
-                        }
-                    })
-                    .catch(() => {
-                        window.api.emit('Trigger-counter', { fileName: file.File_Name, status: 'failed' });
-                    })
-                    .finally(() => {
-                        activeDownloads.splice(activeDownloads.indexOf(downloadPromise), 1);
-                        if (!cancelDownloads) startDownload();
+        const processQueue = async () => {
+            if (isProcessing) return; // Prevent overlapping executions
+            isProcessing = true;
+        
+            try {
+                while (activeDownloads.length < maxConcurrentDownloads && downloadQueue.length > 0) {
+                    const file = downloadQueue.shift();
+                    window.api.logToFile(`[DEBUG] Starting download for: ${file.File_Name}`);
+        
+                    // Declare the downloadPromise variable first
+                    let downloadPromise;
+        
+                    downloadPromise = new Promise((resolve, reject) => {
+                        // Listener function for Trigger-counter
+                        const onTriggerCounter = ({ fileName, status }) => {
+                            if (fileName === file.File_Name) {
+                                window.api.logToFile(`[DEBUG] Trigger-counter received for: ${fileName}, status=${status}`);
+                                window.api.removeListener('Trigger-counter', onTriggerCounter); // Clean up listener
+                                resolve(status === 'downloaded'); // Resolve based on success/failure
+                            }
+                        };
+        
+                        // Add the event listener
+                        window.api.on('Trigger-counter', onTriggerCounter);
+        
+                        // Start the actual download
+                        window.api.downloadFile(file).catch(error => {
+                            window.api.removeListener('Trigger-counter', onTriggerCounter); // Clean up on failure
+                            reject(error); // Reject the promise on download error
+                        });
                     });
-
-                activeDownloads.push(downloadPromise);
+        
+                    // Add to active downloads
+                    activeDownloads.push(downloadPromise);
+        
+                    // Handle download completion
+                    downloadPromise.finally(() => {
+                        activeDownloads.splice(activeDownloads.indexOf(downloadPromise), 1); // Remove from active downloads
+                        window.api.logToFile(`[DEBUG] Download complete for: ${file.File_Name}`);
+                        processQueue(); // Continue processing the queue
+                    });
+                }
+            } finally {
+                isProcessing = false; // Allow further queue processing
+                await updateDeveloperStats(); // Update stats after download
             }
         };
-
+                     
+              
+        const startDownload = async () => {
+            // Fetch the current maxConcurrentDownloads from the main process
+            const maxConcurrentDownloads = await window.api.invoke('get-max-downloads');
+            window.api.logToFile(`[DEBUG] Starting downloads with maxConcurrentDownloads: ${maxConcurrentDownloads}`);
+            window.api.logToFile('[INFO] Download started.');
+        
+            // Start queue processing
+            processQueue();
+        
+            // Track when all downloads are complete
+            await Promise.all(activeDownloads);
+        
+            // Once all downloads are complete, trigger finalizeDownloads
+            finalizeDownloads();
+            window.api.logToFile('[INFO] All downloads completed.');
+        };
+        
+                         
         startDownload();
 
         if (cancelButton && !cancelButton.dataset.listenerAdded) {
             cancelButton.addEventListener('click', () => {
                 cancelDownloads = true;
-                console.log('[INFO] Downloads canceled.');
+                //window.api.logToFile('[INFO] Downloads canceled.');
                 cancelDownloadsImmediately();
                 showCancelDialog();
             });
@@ -880,145 +1087,149 @@ const initializeDownload = () => {
 
 async function loadDownloadedFiles() {
     try {
-        const downloadedFiles = await window.api.invoke('fetch-downloaded-files');
-        downloadedFilesSet = new Set(downloadedFiles); // Store as a Set for quick lookups
-        console.log('[DEBUG] Downloaded files loaded:', downloadedFilesSet.size);
+        window.api.logToFile('[INFO] Loading downloaded files from database...');
+
+        // Query the database for files marked as downloaded
+        const downloadedFiles = await window.api.invoke('query-database', 'fetchDownloadedFiles');
+
+        // Create a Set for quick lookups
+        downloadedFilesSet = new Set(downloadedFiles.map(file => file.File_Name));
+        window.api.logToFile('[DEBUG] Downloaded files loaded:', downloadedFilesSet.size);
+
     } catch (err) {
         console.error('[ERROR] Failed to fetch downloaded files:', err.message);
     }
 }
+
 
 function isFileDownloaded(fileName) {
     return downloadedFilesSet.has(fileName); // Quick lookup in the Set
 }
 
 function addFileActions(fileElement, file) {
-    // Select button
+    window.api.logToFile('[DEBUG] Adding file actions for:', file.File_Name);
+
+    // Buttons
     const selectBtn = fileElement.querySelector('.select-btn');
+    const viewBtn = fileElement.querySelector('.view-btn');
+    const deleteBtn = fileElement.querySelector('.delete-btn');
+    const downloadBtn = fileElement.querySelector('.download-btn');
+
+    // Debug Button Existence
+    window.api.logToFile('[DEBUG] Buttons found for file:', file.File_Name, {
+        selectBtn: !!selectBtn,
+        viewBtn: !!viewBtn,
+        deleteBtn: !!deleteBtn,
+        downloadBtn: !!downloadBtn,
+    });
+
+    // Add Select Button Listener
     if (selectBtn) {
         selectBtn.addEventListener('click', () => {
-            const isSelected = selectedFiles.find((f) => f.File_Name === file.File_Name);
-
+            window.api.logToFile(`[DEBUG] Select clicked for: ${file.File_Name}`);
+            const isSelected = selectedFiles.some((f) => f.File_Name === file.File_Name);
             if (isSelected) {
-                // Remove from selection
                 selectedFiles = selectedFiles.filter((f) => f.File_Name !== file.File_Name);
                 totalSize -= file.File_Size;
                 selectBtn.textContent = 'Select';
             } else {
-                // Add to selection
                 selectedFiles.push(file);
                 totalSize += file.File_Size;
                 selectBtn.textContent = 'Deselect';
             }
-
-            updateFileStats(); // Update stats on the top bar
+            updateFileStats(); // Update UI stats
         });
+    } else {
+        console.error('[ERROR] Select button missing for:', file.File_Name);
     }
 
-    // View button
-    const viewBtn = fileElement.querySelector('.view-btn');
+    // Add View Button Listener
     if (viewBtn) {
         viewBtn.addEventListener('click', async () => {
+            window.api.logToFile(`[DEBUG] View clicked for: ${file.File_Name}`);
             try {
-                const filePath = await window.api.fetchDownloadedFile(file.File_Name);
-
+                // Fetch the file path from the database
+                const filePath = await window.api.fetchDownloadedFile(file.Alt_File_Name);
+    
                 if (!filePath) {
-                    showAlert('File not found in downloaded database.');
-                    console.log('[ERROR] File not found:', file.File_Name);
+                    showAlert('File not found in database.', 'Error');
+                    console.warn('[WARN] File path not found for:', file.File_Name);
                     return;
                 }
-
-                console.log('[INFO] Opening file path:', filePath);
-
-                const response = await window.api.viewFile(filePath);
-                if (!response.success) {
-                    showAlert(`Error: ${response.message}`);
-                }
-            } catch (error) {
-                console.log('[ERROR] Failed to view file:', error.message);
-                showAlert('Failed to view file. Please try again.');
+    
+                // Send a request to open the folder
+                window.api.logToFile('[INFO] Requesting to open folder containing file:', filePath);
+                await window.api.openFolder(filePath);
+            } catch (err) {
+                console.error('[ERROR] Failed to open file folder:', err.message);
+                showAlert('Failed to open file folder. Please try again.', 'Error');
             }
         });
     }
-
-    // Delete button
-    const deleteBtn = fileElement.querySelector('.delete-btn');
+    
+    // Add Delete Button Listener
     if (deleteBtn) {
-        deleteBtn.addEventListener('click', () => {
-            // Get modal elements
-            const modal = document.getElementById('delete-confirmation-modal');
-            const message = modal.querySelector('#delete-confirmation-message');
-            const confirmBtn = modal.querySelector('#confirm-delete-btn');
-            const cancelBtn = modal.querySelector('#cancel-delete-btn');
+        deleteBtn.addEventListener('click', async () => {
+            window.api.logToFile(`[DEBUG] Delete clicked for: ${file.File_Name}`);
     
-            // Set the confirmation message
-            message.textContent = `Are you sure you want to delete "${file.File_Name}"?`;
+            try {
+                let filePath = file.File_Path;
     
-            // Show the modal
-            modal.classList.remove('hidden');
+                // If `filePath` is missing, fetch it dynamically
+                if (!filePath) {
+                    console.warn('[WARN] File path is missing in file object. Fetching from database.');
+                    filePath = await window.api.fetchDownloadedFile(file.Alt_File_Name);
+                }
     
-            // Cancel button logic
-            cancelBtn.addEventListener(
-                'click',
-                () => {
-                    modal.classList.add('hidden'); // Hide the modal
-                },
-                { once: true } // Ensure the event listener is executed only once
-            );
+                if (!filePath) {
+                    console.error('[ERROR] File path is null or undefined for deletion.');
+                    showAlert('Cannot delete file: Path is missing.');
+                    return;
+                }
     
-            // Confirm delete button logic
-            confirmBtn.addEventListener(
-                'click',
-                async () => {
-                    try {
-                        const filePath = await window.api.fetchDownloadedFile(file.File_Name);
+                const response = await window.api.invoke('delete-file', filePath);
+                if (response.success) {
+                    showAlert(`File "${file.File_Name}" deleted successfully.`);
     
-                        if (!filePath) {
-                            showAlert('File not found in downloaded database.', 'Error');
-                            modal.classList.add('hidden');
-                            return;
-                        }
+                    // Update the badge
+                    const statusBadge = fileElement.querySelector('.file-status-badge');
+                if (statusBadge) {
+                    statusBadge.textContent = '✖ Not Downloaded';
+                    statusBadge.style.color = 'white';
+                    statusBadge.style.backgroundColor = 'grey';
+                    fileElement.classList.remove('downloaded');
+                }
     
-                        const response = await window.api.deleteFile(filePath);
-                        if (response.success) {
-                            showAlert(`File "${file.File_Name}" deleted successfully.`, 'Success');
-                            const fileStatusBadge = fileElement.querySelector('.file-status-badge');
-                            fileStatusBadge.textContent = '✖ Not Downloaded';
-                            fileStatusBadge.classList.remove('downloaded');
-                            fileStatusBadge.classList.add('not-downloaded');
-                            updateDeveloperStats(file.Dev_Name);
-                        } else {
-                            showAlert(`Error: ${response.message}`, 'Error');
-                        }
-                    } catch (error) {
-                        showAlert('Failed to delete file. Please try again.', 'Error');
-                    } finally {
-                        modal.classList.add('hidden'); // Always hide the modal
-                    }
-                },
-                { once: true } // Ensure the event listener is executed only once
-            );
+                    // Update developer stats
+                    await updateDeveloperStats(file.Dev_Name); // Update stats for the specific developer
+                    await updateDeveloperStats('ALL'); // Update stats for "ALL"
+                } else {
+                    showAlert(`Failed to delete file: ${response.message}`);
+                }
+            } catch (err) {
+                console.error('[ERROR] Failed to delete file:', err.message);
+                showAlert('An error occurred while deleting the file.');
+            }
         });
-    }
+    }    
     
-    // Download button
-    const downloadBtn = fileElement.querySelector('.download-btn');
+    // Add Download Button Listener
     if (downloadBtn) {
         downloadBtn.addEventListener('click', () => {
-            console.log(`[INFO] Download button clicked for file: ${file.File_Name}`);
-
-            // Add the file to the selected array if not already present
-            if (!selectedFiles.find((f) => f.File_Name === file.File_Name)) {
+            window.api.logToFile(`[DEBUG] Download clicked for: ${file.File_Name}`);
+            if (!selectedFiles.some((f) => f.File_Name === file.File_Name)) {
                 selectedFiles.push(file);
-                updateFileStats(); // Update stats on the top bar
+                updateFileStats(); // Update UI stats
             }
-
-            // Simulate a click on the "Download Selected" button
             const downloadSelectedBtn = document.getElementById('download-selected');
             if (downloadSelectedBtn) {
-                downloadSelectedBtn.click();
+                downloadSelectedBtn.click(); // Simulate clicking the "Download Selected" button
+            } else {
+                console.error('[ERROR] Download Selected button missing.');
             }
         });
+    } else {
+        console.error('[ERROR] Download button missing for:', file.File_Name);
     }
 }
 
@@ -1051,9 +1262,7 @@ const getFolderPath = (file) => {
 
 
 
-// Toggle Button Logic
-
-
+//lbrynet
 document.addEventListener('DOMContentLoaded', () => {
     const statusModal = document.getElementById('status-modal');
     const blocksRemainingElement = document.getElementById('status-blocksBehind');
@@ -1067,13 +1276,13 @@ document.addEventListener('DOMContentLoaded', () => {
         statusModal.style.opacity = 0; // Fade out
         setTimeout(() => {
             statusModal.style.display = 'none'; // Hide modal
-            console.log('[DEBUG] Modal closed.');
+            window.api.logToFile('[DEBUG] Modal closed.');
         }, 500); // Match the CSS transition duration
     }
 
     if (window.lbrynet && typeof window.lbrynet.onStatusUpdate === 'function') {
         window.lbrynet.onStatusUpdate((status) => {
-            console.log('[DEBUG] Received lbrynet-status update:', status);
+            window.api.logToFile('[DEBUG] Received lbrynet-status update:', status);
 
             let blocksBehind = null;
 
@@ -1081,7 +1290,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 blocksBehind = status.blocksBehind;
             } else if (typeof status === 'string') {
                 if (status === 'Synchronization complete.') {
-                    console.log('[DEBUG] Synchronization complete. Closing modal.');
+                    window.api.logToFile('[DEBUG] Synchronization complete. Closing modal.');
                     closeStatusModal();
                     return;
                 }
@@ -1094,10 +1303,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (blocksBehind !== null) {
                 blocksRemainingElement.textContent = `Blocks Remaining: ${blocksBehind}`;
-                console.log(`[DEBUG] Updated blocks remaining: ${blocksBehind}`);
+                window.api.logToFile(`[DEBUG] Updated blocks remaining: ${blocksBehind}`);
 
                 if (blocksBehind === 0) {
-                    console.log('[DEBUG] blocksBehind is 0. Closing modal...');
+                    window.api.logToFile('[DEBUG] blocksBehind is 0. Closing modal...');
                     closeStatusModal();
                 }
             } else {
@@ -1112,28 +1321,56 @@ document.addEventListener('DOMContentLoaded', () => {
 // Initialize the download functionality
 document.addEventListener('DOMContentLoaded', initializeDownload); 
 
-// Helper function to construct the file path for a given file
-
-
+//everything else
 document.addEventListener('DOMContentLoaded', () => {
-    console.log(document.body.innerHTML);
-    console.log('[INFO] renderer.js loaded and running');
+    window.api.logToFile('[INFO] renderer.js loaded and running');
 
+    const settingsModal = document.getElementById('settings-modal');
+    const maxDownloadsInput = document.getElementById('max-downloads');
+    const saveSettingsButton = document.getElementById('save-settings');
+    const closeSettingsButton = document.getElementById('close-settings');
     const developerSection = document.getElementById('developer-section');
     const divider = document.getElementById('divider');
     const selectAllBtn = document.getElementById('select-all');
     const selectNoAudioVideoBtn = document.getElementById('select-no-audio-video');
     const deselectAllBtn = document.getElementById('deselect-all');
+    const cancelDownloadsButton = document.getElementById('cancel-downloads');
+    const developerList = document.getElementById('developer-list');
 
     let isResizing = false;
 
+    // Settings Modal Logic
+    if (settingsModal && maxDownloadsInput && saveSettingsButton && closeSettingsButton) {
+        window.api.on('open-settings', async () => {
+            const currentMaxDownloads = await window.api.invoke('get-max-downloads');
+            maxDownloadsInput.value = currentMaxDownloads; // Set the current value dynamically
+            settingsModal.classList.remove('hidden');
+        });
+
+        saveSettingsButton.addEventListener('click', async () => {
+            const newMaxDownloads = parseInt(maxDownloadsInput.value, 10);
+            if (!isNaN(newMaxDownloads) && newMaxDownloads > 0) {
+                await window.api.invoke('update-max-downloads', newMaxDownloads);
+                alert(`Max concurrent downloads updated to: ${newMaxDownloads}`);
+                settingsModal.classList.add('hidden');
+            } else {
+                alert('Please enter a valid number greater than 0.');
+            }
+        });
+
+        closeSettingsButton.addEventListener('click', () => {
+            settingsModal.classList.add('hidden');
+        });
+    }
+
+    // Popup Modal Logic
     const closePopupButton = document.getElementById('close-popup');
     if (closePopupButton) {
         closePopupButton.addEventListener('click', () => {
             const popupModal = document.getElementById('popup-modal');
             if (popupModal) {
                 popupModal.style.display = 'none';
-                console.log('[INFO] Popup closed.');
+                window.api.logToFile('[INFO] Popup closed.');
             } else {
                 console.error('[ERROR] Popup modal element not found.');
             }
@@ -1142,187 +1379,181 @@ document.addEventListener('DOMContentLoaded', () => {
         console.error('[ERROR] Close button for popup not found.');
     }
 
-    divider.addEventListener('mousedown', (event) => {
-        isResizing = true;
-        document.body.style.cursor = 'col-resize'; // Change cursor during resizing
-    });
+    // Divider Resizing Logic
+    if (divider) {
+        divider.addEventListener('mousedown', () => {
+            isResizing = true;
+            document.body.style.cursor = 'col-resize'; // Change cursor during resizing
+        });
 
-    document.addEventListener('mousemove', (event) => {
-        if (!isResizing) return;
+        document.addEventListener('mousemove', (event) => {
+            if (!isResizing) return;
 
-        // Calculate the new width for the developer section
-        const offsetRight = document.body.offsetWidth - (event.clientX - developerSection.offsetLeft);
-        const newWidth = document.body.offsetWidth - offsetRight;
+            // Calculate the new width for the developer section
+            const offsetRight = document.body.offsetWidth - (event.clientX - developerSection.offsetLeft);
+            const newWidth = document.body.offsetWidth - offsetRight;
 
-        // Clamp the new width between 20% and 50% of the window width
-        if (newWidth >= window.innerWidth * 0.2 && newWidth <= window.innerWidth * 0.5) {
-            developerSection.style.width = `${newWidth}px`;
-        }
-    });
+            // Clamp the new width between 20% and 50% of the window width
+            if (newWidth >= window.innerWidth * 0.2 && newWidth <= window.innerWidth * 0.5) {
+                developerSection.style.width = `${newWidth}px`;
+            }
+        });
 
-    document.addEventListener('mouseup', () => {
-        if (isResizing) {
-            isResizing = false;
-            document.body.style.cursor = 'default'; // Reset cursor
-        }
-    });
-    const cancelDownloadsButton = document.getElementById('cancel-downloads');
+        document.addEventListener('mouseup', () => {
+            if (isResizing) {
+                isResizing = false;
+                document.body.style.cursor = 'default'; // Reset cursor
+            }
+        });
+    }
+
+    // Cancel Downloads Button Logic
     if (cancelDownloadsButton) {
         cancelDownloadsButton.addEventListener('click', () => {
             cancelDownloads = true; // Set cancel state
-            console.log('[INFO] canceled selected.');
-            console.log('[INFO]canceled selected.');
+            window.api.logToFile('[INFO] Canceled downloads.');
         });
     } else {
-        console.log('[ERROR] Cancel Downloads button not found in the DOM.');
+        console.error('[ERROR] Cancel Downloads button not found in the DOM.');
     }
 
-    // Handle "Select All" button click
+    // File Selection Logic
     if (selectAllBtn) {
         selectAllBtn.addEventListener('click', async () => {
             try {
-                const allFiles = await window.api.fetchAllFiles(); // Fetch all files from the loaded database
-                selectedFiles = allFiles.slice(); // Clone all files into selectedFiles
+                const allFiles = await window.api.fetchAllFiles();
+    
+                // Filter for files where Downloaded = 0
+                const nonDownloadedFiles = allFiles.filter(file => file.Downloaded === 0);
+    
+                selectedFiles = [...nonDownloadedFiles];
                 totalSize = selectedFiles.reduce((sum, file) => sum + file.File_Size, 0);
-
+    
                 // Update all developer checkboxes programmatically
                 const developerCheckboxes = document.querySelectorAll('.developer-item input[type="checkbox"]');
-                developerCheckboxes.forEach((checkbox) => {
-                    checkbox.checked = true; // Check the box
-                });
-
+                developerCheckboxes.forEach((checkbox) => (checkbox.checked = true));
+    
                 updateFileStats();
-                console.log('[INFO] All files selected for download.');
+                window.api.logToFile('[INFO] Selected non-downloaded files:', selectedFiles);
             } catch (error) {
-                console.log('[ERROR] Failed to select all files:', error);
+                console.error('[ERROR] Failed to select all files:', error);
             }
         });
-    }
-
-    // Handle "Select All No Audio/Video" button click
+    }    
+    
     if (selectNoAudioVideoBtn) {
         selectNoAudioVideoBtn.addEventListener('click', async () => {
             try {
-                const allFiles = await window.api.fetchAllFiles(); // Correct API call to fetch all files
-                // Filter out files with Media_Type starting with 'audio/' or 'video/'
-                selectedFiles = allFiles.filter(file => {
-                    const mediaType = file.Media_Type?.toLowerCase() || ''; // Safely handle null/undefined and ensure lowercase
-                    return !mediaType.startsWith('video/') && !mediaType.startsWith('audio/');
+                const allFiles = await window.api.fetchAllFiles();
+    
+                // Filter for files where Downloaded = 0 and media type is not audio/video
+                const nonDownloadedNoAudioVideoFiles = allFiles.filter(file => {
+                    const mediaType = file.Media_Type?.toLowerCase() || '';
+                    return file.Downloaded === 0 && !mediaType.startsWith('video/') && !mediaType.startsWith('audio/');
                 });
-                
+    
+                selectedFiles = [...nonDownloadedNoAudioVideoFiles];
                 totalSize = selectedFiles.reduce((sum, file) => sum + file.File_Size, 0);
-
-                // Update stats
+    
                 updateFileStats();
-
-                console.log('[INFO] Files without audio/video selected for download.');
+                window.api.logToFile('[INFO] Selected non-downloaded, non-audio/video files:', selectedFiles);
             } catch (error) {
-                console.log('[ERROR] Failed to select no audio/video files:', error);
+                console.error('[ERROR] Failed to select no audio/video files:', error);
             }
         });
-    }
+    }    
 
     if (deselectAllBtn) {
         deselectAllBtn.addEventListener('click', () => {
             selectedFiles = [];
             totalSize = 0;
-    
+
             // Uncheck all developer checkboxes programmatically
             const developerCheckboxes = document.querySelectorAll('.developer-item input[type="checkbox"]');
-            developerCheckboxes.forEach((checkbox) => {
-                checkbox.checked = false; // Uncheck the box
-            });
-            document.querySelectorAll('.select-btn').forEach((btn) => {
-                btn.textContent = 'Select';});
+            developerCheckboxes.forEach((checkbox) => (checkbox.checked = false));
 
-            updateFileStats(); // Update file count and size
-            console.log('[INFO] All files deselected.');
+            updateFileStats();
+            window.api.logToFile('[INFO] All files deselected.');
         });
     }
 
-     // Handle developer checkbox clicks
-     const developerList = document.getElementById('developer-list');
-     if (developerList) {
-         developerList.addEventListener('change', async (event) => {
-             const checkbox = event.target;
-             if (checkbox.classList.contains('developer-checkbox')) {
-                 const devName = checkbox.getAttribute('data-dev-name');
- 
-                 if (checkbox.checked) {
-                     try {
-                         const files = await window.api.fetchFilesByDeveloper(devName);
-                         selectedFiles.push(...files); // Add all files from the developer
-                         totalSize += files.reduce((sum, file) => sum + file.File_Size, 0);
-                     } catch (error) {
-                         console.log(`[ERROR] Failed to fetch files for developer ${devName}:`, error);
-                     }
-                 } else {
-                     // Remove all files from the developer
-                     selectedFiles = selectedFiles.filter((file) => file.Dev_Name !== devName);
-                     totalSize = selectedFiles.reduce((sum, file) => sum + file.File_Size, 0);
-                 }
- 
-                 updateFileStats(); // Update file count and size
-             }
-         });
-     }
+    // Developer Checkbox Logic
+    if (developerList) {
+        developerList.addEventListener('change', async (event) => {
+            const checkbox = event.target;
+            if (checkbox.classList.contains('developer-checkbox')) {
+                const devName = checkbox.getAttribute('data-dev-name');
+
+                if (checkbox.checked) {
+                    try {
+                        const files = await window.api.fetchFilesByDeveloper(devName);
+                        selectedFiles.push(...files);
+                        totalSize += files.reduce((sum, file) => sum + file.File_Size, 0);
+                    } catch (error) {
+                        console.error(`[ERROR] Failed to fetch files for developer ${devName}:`, error);
+                    }
+                } else {
+                    selectedFiles = selectedFiles.filter((file) => file.Dev_Name !== devName);
+                    totalSize = selectedFiles.reduce((sum, file) => sum + file.File_Size, 0);
+                }
+
+                updateFileStats();
+            }
+        });
+    }
 });
 
-
 window.api.getConfig().then((config) => {
-    console.log('[INFO] Loaded Config:', config);
+    window.api.logToFile('[INFO] Loaded Config:', config);
 
     // Check if the configuration is valid
-    if (!config) {
-        console.log('[ERROR] Failed to load config. Configuration object is null or undefined.');
+    if (!config || !config.libraryFolder) {
+        console.error('[ERROR] Library folder not set or configuration is invalid.');
+        showAlert('Please set a library folder in the settings.');
         return;
     }
 
-    // Pre-fill the library folder if cached
-//    if (config.libraryFolder) {
-//        console.log('[INFO] Using cached library folder:', config.libraryFolder);
-//        showAlert`Library folder restored: ${config.libraryFolder}`);
-//    } else {
-//        console.log('[INFO] No library folder cached.');
-//    }
+    window.api.logToFile('[INFO] Using library folder:', config.libraryFolder);
 
-    // Automatically load the last database if cached
-    if (config.lastDatabase) {
-        console.log('[INFO] Using cached database:', config.lastDatabase);
+    // Fetch developers from the main database
+    setTimeout(() => {
+        window.api.fetchDevelopers()
+        .then(() => { 
+            initializeDevelopers();
+            initializeFiles();
+            
+        })
+        .catch((err) => {
+            console.error('[ERROR] Failed to fetch developers on startup:', err.message);
+            showAlert('Failed to fetch developers. Please check your library settings.');
+        });
+    }, 3000); // Wait for 2 seconds before calling the initialization functions
 
-        // Fetch developers from the last loaded database
-        window.api.fetchDevelopers(config.lastDatabase)
-            .then(loadDevelopers)
-            .catch((err) => {
-                console.log('[ERROR] Failed to fetch developers on startup:', err.message);
-                showAlert('Failed to fetch developers from the cached database. Please load a new database.');
-            });
-    } else {
-        console.log('[INFO] No database cached.');
-    }
+        
 }).catch((err) => {
-    console.log('[ERROR] Failed to retrieve config:', err.message);
+    console.error('[ERROR] Failed to retrieve configuration:', err.message);
     showAlert('An error occurred while loading the configuration. Please check the logs for details.');
 });
 
 window.api.on('file-status-updated', (updateInfo) => {
-    console.log('[DEBUG] Received file-status-updated event:', updateInfo);
+    window.api.logToFile('[DEBUG] Received file-status-updated event:', updateInfo);
 
+    // Validate the updateInfo object
     if (!updateInfo || typeof updateInfo !== 'object') {
         console.error('[ERROR] Invalid updateInfo received:', updateInfo);
         return;
     }
 
-    const { fileName, status, developerName } = updateInfo;
+    const { fileName, status, developerName, isNew } = updateInfo;
 
-    if (!fileName || !status) {
+    if (!fileName || status === undefined) {
         console.error('[ERROR] Missing fileName or status in updateInfo:', updateInfo);
         return;
     }
 
-    console.log(`[INFO] Updating file status: ${fileName} -> ${status}`);
+    window.api.logToFile(`[INFO] Updating file status: ${fileName} -> ${status}, isNew: ${isNew}`);
 
-    // Locate the file element in the UI and update the badge
+    // Locate and update the file element in the UI
     const fileElement = Array.from(document.querySelectorAll('.file-item')).find((el) =>
         el.dataset.fileName === fileName
     );
@@ -1330,18 +1561,40 @@ window.api.on('file-status-updated', (updateInfo) => {
     if (fileElement) {
         const statusBadge = fileElement.querySelector('.file-status-badge');
         if (statusBadge) {
-            if (status === 'downloaded') {
+            if (isNew === 1) {
+                statusBadge.textContent = 'NEW!!';
+                statusBadge.style.color = 'white';
+                statusBadge.style.backgroundColor = 'purple';
+                fileElement.classList.add('new');
+            } else if (status === 'downloaded') {
                 statusBadge.textContent = '✔ Downloaded';
                 statusBadge.style.color = 'white';
                 statusBadge.style.backgroundColor = 'green';
+                fileElement.classList.remove('new');
+                fileElement.classList.add('downloaded');
             } else {
-                statusBadge.textContent = '✖ Error';
+                statusBadge.textContent = '✖ Not Downloaded';
                 statusBadge.style.color = 'white';
-                statusBadge.style.backgroundColor = 'red';
+                statusBadge.style.backgroundColor = 'grey';
+                fileElement.classList.remove('new');
+                fileElement.classList.remove('downloaded');
             }
         }
     } else {
-        console.error('[ERROR] File element not found for:', fileName);
+        console.warn('[WARN] File element not found in UI for:', fileName);
+    }
+
+    // Highlight developers with new files
+    if (developerName) {
+        const developerDiv = document.querySelector(`[data-dev-name="${developerName}"]`);
+        if (developerDiv) {
+            const hasNewFiles = Array.from(document.querySelectorAll('.file-item')).some(
+                (fileEl) => fileEl.dataset.devName === developerName && fileEl.classList.contains('new')
+            );
+            developerDiv.style.backgroundColor = hasNewFiles ? 'purple' : '';
+        } else {
+            console.warn('[WARN] Developer div not found for:', developerName);
+        }
     }
 
     // Update the developer's downloaded count in the UI
@@ -1349,42 +1602,120 @@ window.api.on('file-status-updated', (updateInfo) => {
         const developerDiv = document.querySelector(`[data-dev-name="${developerName}"]`);
         if (developerDiv) {
             const downloadedColumn = developerDiv.querySelector('.downloaded-column');
-            if (downloadedColumn && status === 'downloaded') {
+            if (downloadedColumn) {
                 const currentCount = parseInt(downloadedColumn.textContent, 10) || 0;
-                downloadedColumn.textContent = currentCount + 1;
+                if (status === 'downloaded') {
+                    downloadedColumn.textContent = currentCount + 1;
+                } else if (status === 'not-downloaded' && currentCount > 0) {
+                    downloadedColumn.textContent = currentCount - 1;
+                }
             }
-        } else {
-            console.warn('[WARN] Developer div not found for:', developerName);
         }
     }
 
     // Update the "ALL" downloaded count
     const allDownloadedColumn = document.querySelector('.developer-item[data-dev-name="ALL"] .downloaded-column');
-    if (allDownloadedColumn && status === 'downloaded') {
+    if (allDownloadedColumn) {
         const currentAllCount = parseInt(allDownloadedColumn.textContent, 10) || 0;
-        allDownloadedColumn.textContent = currentAllCount + 1;
+        if (status === 'downloaded') {
+            allDownloadedColumn.textContent = currentAllCount + 1;
+        } else if (status === 'not-downloaded' && currentAllCount > 0) {
+            allDownloadedColumn.textContent = currentAllCount - 1;
+        }
     }
 });
 
 window.api.on('update-developer-stats', async (developerName) => {
-    console.log(`[DEBUG] Received update-developer-stats event for developer: ${developerName}`);
+    window.api.logToFile(`[DEBUG] Received update-developer-stats event for developer: ${developerName}`);
     await updateDeveloperStats(developerName); // Call the corrected function
 });
 
 window.api.on('database-loaded', (dbPath) => {
-    console.log('[INFO] Database loaded in renderer:', dbPath);
+    window.api.logToFile('[INFO] Database loaded in renderer:', dbPath);
 });
 
-window.api.onDatabaseLoaded(async (dbPath) => {
-    console.log('[DEBUG] Received database-loaded event with path:', dbPath);
+window.api.onDatabaseLoaded(() => {
+    window.api.logToFile('[INFO] Database loaded. Initializing developers and files.');
+    initializeDevelopers(); // Ensure developers are loaded
+    initializeFiles();      // Ensure files are loaded
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+window.api.on('scan-folder', async () => {
+    const folderPath = await window.api.selectFolder();
+    if (!folderPath) return;
 
     try {
-        const developers = await window.api.fetchDevelopers(dbPath);
-        console.log('[DEBUG] Developers fetched:', developers);
+        const matchingFiles = await window.api.scanFolder(folderPath);
+        if (matchingFiles.length === 0) {
+            alert('No matching files found.');
+            return;
+        }
 
-        loadDevelopers(developers);
-        console.log('[DEBUG] Developer list updated after database-loaded event.');
-    } catch (err) {
-        console.log('[ERROR] Failed to fetch developers after database-loaded event:', err.message);
+        const fileCount = matchingFiles.length;
+        showScanResults(matchingFiles, folderPath, fileCount);
+    } catch (error) {
+        console.error('[ERROR] Failed to scan folder:', error);
+        alert('An error occurred while scanning the folder.');
     }
 });
+
+function showScanResults(files, folderPath, fileCount) {
+    const modal = document.getElementById('scan-results-modal');
+    const resultsContainer = document.getElementById('scan-results-container');
+
+    // Display file count
+    resultsContainer.innerHTML = `
+        <p><strong>${fileCount}</strong> matching files found in</p>
+        <p>"${folderPath}".</p>
+        <p>Choose an action for these files:</p>
+    `;
+
+    const moveBtn = document.getElementById('move-files-btn');
+    const keepBtn = document.getElementById('keep-files-btn');
+
+    moveBtn.onclick = async () => handleFiles(files, 'move');
+    keepBtn.onclick = async () => handleFiles(files, 'keep');
+
+    modal.classList.remove('hidden');
+}
+
+async function handleFiles(files, action) {
+    try {
+        const result = await window.api.processScannedFiles(files, action);
+        if (result) {
+            initializeDevelopers();
+            initializeFiles();
+
+
+            // Close the modal after processing
+            const modal = document.getElementById('scan-results-modal');
+            if (modal) {
+                modal.classList.add('hidden'); // Hide the modal
+            }
+
+            alert('Files processed successfully.');
+        }
+    } catch (error) {
+        console.error('[ERROR] Failed to process files:', error.message);
+        alert('An error occurred while processing files. Please try again.');
+    }
+}

@@ -38,25 +38,16 @@ function sanitizeFolderName(name) {
     return name.replace(/[<>:"/\\|?*]/g, '');
 }
 
-// Ensure the ./db/ directory exists
-function ensureDbDirectory() {
-    const dbDir = join(__dirname, 'db');
-    if (!fs.existsSync(dbDir)) {
-        fs.mkdirSync(dbDir, { recursive: true });
-    }
-    return dbDir;
-}
-
 // Setup SQLite database
 function setupDatabase(dbPath) {
-    logToFile('[DEBUG] Setting up database at:', dbPath);
+    console.log('[DEBUG] Setting up database at:', dbPath);
 
     const db = new sqlite3.Database(dbPath, (err) => {
         if (err) {
-            logToFile('[ERROR] Failed to create database:', err.message);
+            console.error('[ERROR] Failed to create database:', err.message);
             throw new Error('Failed to create database.');
         } else {
-            logToFile('[DEBUG] Database successfully created at:', dbPath);
+            console.log('[DEBUG] Database successfully created or opened at:', dbPath);
         }
     });
 
@@ -75,14 +66,17 @@ function setupDatabase(dbPath) {
                 Media_Type TEXT,
                 Description TEXT,
                 Thumbnail_URL TEXT,
-                File_Download_Name TEXT
+                File_Download_Name TEXT,
+                Downloaded INTEGER DEFAULT 0, -- New column to track downloaded status
+                New INTEGER DEFAULT 0,       -- New column to flag new or updated entries
+                File_Path TEXT               -- New column to store file path
             )
         `, (err) => {
             if (err) {
-                logToFile('[ERROR] Failed to create table Claims:', err.message);
+                console.error('[ERROR] Failed to create table Claims:', err.message);
                 throw new Error('Failed to create Claims table.');
             } else {
-                logToFile('[DEBUG] Claims table successfully created or already exists.');
+                console.log('[DEBUG] Claims table successfully created or already exists.');
             }
         });
     });
@@ -199,93 +193,160 @@ async function fetchClaimsForDeveloper(devName, devClaimId) {
 // Main process
 async function populateDatabase(excelFile, sheetIndex, libraryFolder) {
     try {
-        // Existing database population logic...
         const { links, dbDate } = readOdyseeLinksAndDate(excelFile, sheetIndex);
-        const dbName = `odysee_${dbDate}.db`;
-        const dbPath = path.join(libraryFolder, dbName);
+        const dbPath = path.join(libraryFolder, 'main.db'); // Path to main.db
+        console.log('[DEBUG] Database path:', dbPath);
 
-        logToFile('[DEBUG] Database path constructed:', dbPath);
+        const db = new sqlite3.Database(dbPath);
 
-        const db = setupDatabase(dbPath);
+        // Step 1: Fetch all existing claims from the database
+        const existingClaims = await new Promise((resolve, reject) => {
+            db.all(`SELECT * FROM Claims`, [], (err, rows) => {
+                if (err) {
+                    console.error('[ERROR] Failed to fetch existing claims:', err.message);
+                    reject(err);
+                } else {
+                    resolve(rows.reduce((map, row) => {
+                        map[row.File_Claim_ID] = row; // Use File_Claim_ID as the key for easy lookup
+                        return map;
+                    }, {}));
+                }
+            });
+        });
 
-        // Process developer claims
-        logToFile('[DEBUG] Resolving claims for developer links...');
+        console.log(`[DEBUG] Fetched ${Object.keys(existingClaims).length} existing claims from the database.`);
+
+        // Step 2: Resolve new claims from links and fetch their metadata
         const resolveTasks = links.map(link => {
-            const lbryUrl = convertToLbryUrl(link); // Convert link to LBRY URL
-            if (!lbryUrl) return null; // Skip invalid links
+            const lbryUrl = convertToLbryUrl(link);
+            if (!lbryUrl) return null;
 
             const devName = lbryUrl.split(':')[1];
             return limit(() => resolveClaimId(lbryUrl).then(claimId => ({ devName, claimId })));
-        }).filter(Boolean); // Remove null tasks
+        }).filter(Boolean);
 
         const resolved = (await Promise.all(resolveTasks)).filter(result => result?.claimId);
 
-        // Fetch claims for developers
-        logToFile('[DEBUG] Fetching claims for developers...');
         const claimTasks = resolved.map(({ devName, claimId }) =>
             limit(() => fetchClaimsForDeveloper(devName, claimId))
         );
 
-        const developerClaims = (await Promise.all(claimTasks)).flat();
+        const newClaims = (await Promise.all(claimTasks)).flat();
 
-        // Process individual claims from Sheet 5
-        logToFile('[DEBUG] Processing individual claims from Sheet 5...');
+        // Step 2.1: Process individual claims from Sheet 5
         const individualClaims = await processIndividualClaims(excelFile);
+        const combinedClaims = [...newClaims, ...individualClaims];
 
-        // Combine all claims (developer + individual)
-        const allClaims = [...developerClaims, ...individualClaims];
+        console.log(`[INFO] Combined total claims to process: ${combinedClaims.length}`);
 
-        // Insert all claims into the database
-        await new Promise((resolve, reject) => {
-            db.serialize(() => {
-                const insertStmt = db.prepare(`
-                    INSERT OR REPLACE INTO Claims (
-                        File_Name, Alt_File_Name, File_Claim_ID, File_URL, Alt_File_URL,
-                        File_Size, Dev_Name, Dev_Claim_ID, Release_Date, Media_Type,
-                        Description, Thumbnail_URL, File_Download_Name
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                `);
+        // Step 3: Process new claims and compare with existing claims
+        let newFilesCount = 0;
+        let updatedFilesCount = 0;
 
-                allClaims.forEach(claim => {
-                    logToFile(`[DEBUG] Claim being inserted: ${JSON.stringify(claim, null, 2)}`);
-                    insertStmt.run(
-                        claim.File_Name,
-                        sanitizeFolderName(claim.File_Name),
-                        claim.File_Claim_ID,
-                        claim.File_URL,
-                        claim.Alt_File_URL || null,
-                        claim.File_Size || 0,
-                        claim.Dev_Name,
-                        claim.Dev_Claim_ID || null,
-                        claim.Release_Date || 'Unknown',
-                        claim.Media_Type || '',
-                        claim.Description || '',
-                        claim.Thumbnail_URL || '',
-                        claim.File_Download_Name || '',
-                        (err) => {
-                            if (err) {
-                                logToFile('[ERROR] Failed to insert claim:', err.message);
-                                reject(err);
-                            }
+        const insertOrUpdate = db.prepare(`
+            INSERT INTO Claims (
+                File_Name, Alt_File_Name, File_Claim_ID, File_URL, Alt_File_URL,
+                File_Size, Dev_Name, Dev_Claim_ID, Release_Date, Media_Type,
+                Description, Thumbnail_URL, File_Download_Name, Downloaded, New, File_Path
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, NULL)
+            ON CONFLICT(File_Claim_ID) DO UPDATE SET
+                File_Size = excluded.File_Size,
+                Release_Date = excluded.Release_Date,
+                Description = excluded.Description,
+                New = CASE
+                    WHEN excluded.File_Size != Claims.File_Size OR
+                         excluded.Release_Date != Claims.Release_Date OR
+                         excluded.Description != Claims.Description
+                    THEN 1
+                    ELSE Claims.New
+                END
+        `);
+
+        for (const claim of combinedClaims) {
+            const existingClaim = existingClaims[claim.File_Claim_ID];
+            const isNew = !existingClaim;
+
+            if (isNew) {
+                console.log(`[INFO] Adding new claim: ${claim.File_Claim_ID}`);
+                newFilesCount++;
+            } else {
+                // Compare and check for changes
+                const oldFileSize = parseInt(existingClaim.File_Size, 10) || 0;
+                const newFileSize = parseInt(claim.File_Size, 10) || 0;
+
+                const hasChanges =
+                    oldFileSize !== newFileSize ||
+                    existingClaim.Release_Date !== claim.Release_Date ||
+                    existingClaim.Description !== claim.Description;
+
+                if (hasChanges) {
+                    console.log(`[INFO] Updating claim: ${claim.File_Claim_ID}`);
+                    if (oldFileSize !== newFileSize) {
+                        console.log(
+                            `[INFO] File_Size changed for ${claim.File_Claim_ID}: ` +
+                            `Old=${oldFileSize}, New=${newFileSize}`
+                        );
+                    }
+                    if (existingClaim.Release_Date !== claim.Release_Date) {
+                        console.log(
+                            `[INFO] Release_Date changed for ${claim.File_Claim_ID}: ` +
+                            `Old=${existingClaim.Release_Date}, New=${claim.Release_Date}`
+                        );
+                    }
+                    if (existingClaim.Description !== claim.Description) {
+                        console.log(
+                            `[INFO] Description changed for ${claim.File_Claim_ID}: ` +
+                            `Old="${existingClaim.Description}", New="${claim.Description}"`
+                        );
+                    }
+                    updatedFilesCount++;
+                } else {
+                    console.log(`[DEBUG] No changes for claim: ${claim.File_Claim_ID}`);
+                    continue; // Skip processing if no changes
+                }
+            }
+
+            // Insert or update the claim
+            await new Promise((resolve, reject) => {
+                insertOrUpdate.run(
+                    claim.File_Name,
+                    sanitizeFolderName(claim.File_Name),
+                    claim.File_Claim_ID,
+                    claim.File_URL,
+                    claim.Alt_File_URL || null,
+                    claim.File_Size || 0,
+                    claim.Dev_Name,
+                    claim.Dev_Claim_ID || null,
+                    claim.Release_Date || 'Unknown',
+                    claim.Media_Type || '',
+                    claim.Description || '',
+                    claim.Thumbnail_URL || '',
+                    claim.File_Download_Name || '',
+                    (err) => {
+                        if (err) {
+                            console.error('[ERROR] Failed to insert or update claim:', err.message);
+                            reject(err);
+                        } else {
+                            resolve();
                         }
-                    );
-                });
-
-                insertStmt.finalize();
-
-                db.close(() => {
-                    logToFile(`[INFO] Database population completed: ${dbPath}`);
-                    resolve();
-                });
+                    }
+                );
             });
+        }
+
+        insertOrUpdate.finalize();
+
+        db.close(() => {
+            console.log('[INFO] Database update completed successfully.');
+            console.log(`[INFO] New files added: ${newFilesCount}`);
+            console.log(`[INFO] Existing files updated: ${updatedFilesCount}`);
         });
 
-        // Perform cleanup
-        await cleanupDatabase(dbPath);
-
-        return dbPath; // Return the path to the created database
+        // Step 4: Return the number of new and updated files to main.js
+        return { newFiles: newFilesCount, updatedFiles: updatedFilesCount };
     } catch (err) {
-        logToFile('[ERROR] Failed to populate database:', err.message);
+        console.error('[ERROR] Failed to populate database:', err.message);
         throw err;
     }
 }
@@ -437,7 +498,7 @@ async function cleanupDatabase(dbPath) {
 
 // Extract Dev_Name from Alt_File_URL
 function extractDevName(altFileUrl) {
-    if (!altFileUrl) return 'UnknownDev';
+    if (!altFileUrl) return 'AnonymousDevs';
 
     // Match the part inside the forward slashes and replace "#" with "_"
     const match = altFileUrl.match(/lbry:\/\/(@[^\/]+)/);
@@ -445,7 +506,7 @@ function extractDevName(altFileUrl) {
         return match[1].replace(/#/g, '_');
     }
 
-    return 'UnknownDev'; // Default if no match is found
+    return 'AnonymousDevs'; // Default if no match is found
 }
    
 // Export the function so it can be called from another script
