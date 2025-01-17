@@ -1,4 +1,4 @@
-###Dotantions
+### Dotantions
 Quick update. it's come to my attention that people would like to donate so with some help ive set up a BTC wallet for anyone who would like to. obviously not required as this boy is open-source! but it is greatly appreciated. 
 
 BTC Wallet: bc1q806lw0z7lnrv0zc7ztg4k9vdv72npv7ma3nd6r
