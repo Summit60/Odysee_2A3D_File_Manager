@@ -138,7 +138,7 @@ html, body {
 /* Scrollable Areas */
 .scrollable {
     overflow-y: auto; /* Enable vertical scrolling */
-    height: 100%; /* Ensure the container has a height */
+    max-height: calc(100vh - 120px); /* Adjust for header/footer spacing */
     flex: 1; /* Fill remaining space */
     box-sizing: border-box; /* Include padding in height calculation */
 }
@@ -234,6 +234,12 @@ input[type="text"] {
     z-index: 10; /* Ensure it appears above other elements */
     white-space: nowrap; /* Prevent text wrapping */
     transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+.new-developer {
+    background-color: purple;
+    color: white;
+    font-weight: bold;
 }
 
 .file-status-badge.downloaded {
@@ -407,6 +413,7 @@ input[type="text"] {
     justify-content: center;
     align-items: center;
     z-index: 1000;
+    overflow-y: auto; /* Enable vertical scrolling */
 }
 
 /* Hidden Class */
