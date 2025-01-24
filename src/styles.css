@@ -10,7 +10,26 @@ html, body {
     color: #333;
 }
 
+.dev-list-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
 
+#dev-results-counter {
+    font-size: 0.9em;
+    color: #666;
+    margin-left: 10px;
+}
+
+.search-results-count {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #666;
+    font-size: 0.9em;
+}
 
 /* Top Bar */
 #top-bar {

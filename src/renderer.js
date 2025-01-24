@@ -78,6 +78,8 @@ async function initializeDevelopers() {
     } catch (error) {
         console.error('[ERROR] Failed to initialize developers:', error.message);
     }
+
+    refreshDeveloperList(); // Show initial count
 }
 
 
@@ -92,11 +94,22 @@ if (!searchFilesInput.dataset.listenerAdded) {
     searchFilesInput.dataset.listenerAdded = true; // Mark the listener as added
 }
 
+// In the initialization code
 if (!searchDevelopersInput.dataset.listenerAdded) {
     const debouncedDeveloperSearch = debounce(refreshDeveloperList, 300);
     searchDevelopersInput.addEventListener('input', debouncedDeveloperSearch);
-    searchDevelopersInput.dataset.listenerAdded = true; // Mark listener as added
-    window.api.logToFile('[DEBUG] Developer search listener added.');
+   
+    const devResultsCount = document.createElement('span');
+    devResultsCount.id = 'dev-results-counter';
+    devResultsCount.className = 'results-counter';
+    searchDevelopersInput.parentElement.appendChild(devResultsCount);
+   
+    searchDevelopersInput.dataset.listenerAdded = true;
+    
+    // Trigger initial count display
+    refreshDeveloperList();
+    
+    window.api.logToFile('[DEBUG] Developer search listener and results counter added.');
 }
 
 if (selectedDeveloperId && selectedDeveloperId !== 'all') {
@@ -118,14 +131,20 @@ async function refreshFileList() {
             window.api.logToFile(`[DEBUG] Filtered by "Downloaded Only": ${filteredFiles.length} files.`);
         }
 
-        // Apply the search query filter
-        const searchQuery = searchFilesInput.value.trim().toLowerCase();
+        // Apply multi-term search filtering
+        const searchQuery = searchFilesInput.value.trim();
         if (searchQuery) {
-            filteredFiles = filteredFiles.filter(file =>
-                file.File_Name.toLowerCase().includes(searchQuery) ||
-                (file.Description && file.Description.toLowerCase().includes(searchQuery))
+            const searchTerms = searchQuery.toLowerCase().split(' ').filter(term => term);
+            
+            filteredFiles = filteredFiles.filter(file => 
+                searchTerms.every(term => 
+                    file.File_Name.toLowerCase().includes(term) ||
+                    (file.Description && file.Description.toLowerCase().includes(term)) ||
+                    (file.Dev_Name && file.Dev_Name.toLowerCase().includes(term))
+                )
             );
-            window.api.logToFile(`[DEBUG] Filtered by search query "${searchQuery}": ${filteredFiles.length} files.`);
+            
+            window.api.logToFile(`[DEBUG] Filtered by search terms "${searchTerms.join(', ')}": ${filteredFiles.length} files.`);
         }
 
         // Deduplicate files by File_Claim_ID
@@ -145,32 +164,77 @@ async function refreshFileList() {
         // Load and display the filtered files
         window.api.logToFile(`[DEBUG] Final file count for display: ${filteredFiles.length}`);
         await loadFiles(filteredFiles);
+
     } catch (error) {
         console.error('[ERROR] Failed to refresh file list:', error.message);
+        window.api.logToFile(`[ERROR] Failed to refresh file list: ${error.message}`);
     }
 }
 
-function refreshDeveloperList() {
-    const developerItems = document.querySelectorAll('.developer-item');
-    const searchQuery = searchDevelopersInput?.value?.trim().toLowerCase() || ''; // Ensure valid query
+async function refreshDeveloperList() {
+    try {
+        // First fetch fresh developer data
+        const developers = await window.api.fetchDevelopers();
+        const developerCounts = await window.api.getAllDeveloperCounts();
+        
+        // Calculate totals for "ALL" entry
+        let totalDownloaded = 0;
+        Object.values(developerCounts).forEach(counts => {
+            totalDownloaded += counts.downloaded || 0;
+        });
 
-    developerItems.forEach((devItem) => {
-        const devName = devItem.dataset.devName;
+        // Update the DOM with fresh data
+        const developerList = document.getElementById('developer-list');
+        
+        // Update "ALL" entry first
+        const allDevElement = developerList.querySelector('[data-dev-name="ALL"]');
+        if (allDevElement) {
+            const allDownloadedColumn = allDevElement.querySelector('.downloaded-column');
+            if (allDownloadedColumn) {
+                allDownloadedColumn.textContent = totalDownloaded;
+            }
+        }
 
-        // Calculate downloaded count dynamically
-        const downloadedCount = allFiles.filter(file => 
-            file.Dev_Name === devName && file.isDownloaded
-        ).length;
+        // Update individual developers
+        developers.forEach(developer => {
+            const devElement = developerList.querySelector(`[data-dev-name="${developer.Dev_Name}"]`);
+            if (devElement) {
+                const downloadedColumn = devElement.querySelector('.downloaded-column');
+                if (downloadedColumn) {
+                    downloadedColumn.textContent = developerCounts[developer.Dev_Name]?.downloaded || 0;
+                }
+            }
+        });
 
-        // Check if the developer matches the toggle and search criteria
-        const matchesToggle = !isViewingDownloaded || downloadedCount > 0;
-        const matchesSearch = devName.toLowerCase().includes(searchQuery);
+        // Now apply the visibility filters
+        const searchQuery = searchDevelopersInput?.value?.trim().toLowerCase() || '';
+        const devResultsCounter = document.querySelector('.search-container #dev-results-counter');
+        let visibleCount = 0;
 
-        devItem.style.display = matchesToggle && matchesSearch ? '' : 'none';
-    });
+        const developerItems = document.querySelectorAll('.developer-item');
+        developerItems.forEach((devItem) => {
+            const devName = devItem.dataset.devName;
+            const downloadedCount = developerCounts[devName]?.downloaded || 0;
 
-    window.api.logToFile('[INFO] Developer list refreshed based on toggle and search.');
+            const matchesToggle = !isViewingDownloaded || downloadedCount > 0;
+            const matchesSearch = devName.toLowerCase().includes(searchQuery);
+
+            const isVisible = matchesToggle && matchesSearch;
+            devItem.style.display = isVisible ? '' : 'none';
+            
+            if (isVisible) visibleCount++;
+        });
+
+        if (devResultsCounter) {
+            devResultsCounter.textContent = `Results: ${visibleCount}`;
+        }
+
+        window.api.logToFile(`[INFO] Developer list refreshed with ${visibleCount} visible developers`);
+    } catch (error) {
+        window.api.logToFile(`[ERROR] Failed to refresh developer list: ${error.message}`);
+    }
 }
+
 
 async function handleDeveloperSelection(developerName) {
     selectedDeveloperId = developerName === 'ALL' ? 'all' : developerName;
@@ -208,6 +272,18 @@ function updateResultsCounter(count) {
     }
 }
 
+function updateDevListCounter(count) {
+    const counterElement = document.getElementById('dev-results-counter');
+    if (!counterElement) {
+        const devListHeader = document.querySelector('.dev-list-header');
+        const counter = document.createElement('span');
+        counter.id = 'dev-results-counter';
+        counter.className = 'results-counter';
+        devListHeader.appendChild(counter);
+    }
+    document.getElementById('dev-results-counter').textContent = `${count} results`;
+}
+
 // Debounce utility to limit frequent function calls
 function debounce(func, delay) {
     let timeout;
@@ -219,11 +295,19 @@ function debounce(func, delay) {
 
 // Generic function to filter items based on query
 function filterItems(items, query, fields) {
-    const lowerCaseQuery = query.trim().toLowerCase();
-    if (!lowerCaseQuery) return items;
-
-    return items.filter((item) => {
-        return fields.some((field) => item[field]?.toLowerCase().includes(lowerCaseQuery));
+    if (!query) return items;
+    
+    // Split search terms and remove empty strings
+    const searchTerms = query.toLowerCase().split(' ').filter(term => term);
+    
+    return items.filter(item => {
+        // Check if all search terms match somewhere in the specified fields
+        return searchTerms.every(term => {
+            return fields.some(field => {
+                const fieldValue = String(item[field] || '').toLowerCase();
+                return fieldValue.includes(term);
+            });
+        });
     });
 }
 
@@ -501,6 +585,8 @@ async function loadDevelopers(developers) {
             }
         }
     });
+
+    refreshDeveloperList(); // Show initial count
 }
 
 async function loadFiles(files) {
@@ -544,7 +630,7 @@ async function loadFiles(files) {
 
     // Function to create a file element from the template
     const createFileElement = (file) => {
-        window.api.logToFile('[DEBUG] Creating file element for:', file);
+ //       window.api.logToFile(`[DEBUG] Creating file element for: ${file.File_Name}`);
     
         // Clone the template
         const template = document.getElementById('file-item-template').content.cloneNode(true);
@@ -765,7 +851,8 @@ toggleViewModeButton.addEventListener('click', () => {
     toggleViewModeButton.textContent = isViewingDownloaded ? 'View All' : 'View Downloaded';
 
     window.api.logToFile(`[INFO] Toggled view mode: ${isViewingDownloaded ? 'Downloaded Only' : 'All Files'}`);
-    refreshFileList();; // Reapply filters
+    refreshFileList(); // Reapply filters
+    refreshDeveloperList();
 });
 
 //////////////Download and Progress File Management//////////////
@@ -1107,7 +1194,7 @@ function isFileDownloaded(fileName) {
 }
 
 function addFileActions(fileElement, file) {
-    window.api.logToFile('[DEBUG] Adding file actions for:', file.File_Name);
+//    window.api.logToFile(`[DEBUG] Adding file actions for: ${file.File_Name}`);
 
     // Buttons
     const selectBtn = fileElement.querySelector('.select-btn');
@@ -1116,12 +1203,12 @@ function addFileActions(fileElement, file) {
     const downloadBtn = fileElement.querySelector('.download-btn');
 
     // Debug Button Existence
-    window.api.logToFile('[DEBUG] Buttons found for file:', file.File_Name, {
-        selectBtn: !!selectBtn,
-        viewBtn: !!viewBtn,
-        deleteBtn: !!deleteBtn,
-        downloadBtn: !!downloadBtn,
-    });
+//    window.api.logToFile('[DEBUG] Buttons found for file:', file.File_Name, {
+//        selectBtn: !!selectBtn,
+//        viewBtn: !!viewBtn,
+//        deleteBtn: !!deleteBtn,
+//        downloadBtn: !!downloadBtn,
+//    });
 
     // Add Select Button Listener
     if (selectBtn) {
@@ -1641,48 +1728,34 @@ window.api.onDatabaseLoaded(() => {
 });
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 window.api.on('scan-folder', async () => {
     const folderPath = await window.api.selectFolder();
     if (!folderPath) return;
 
     try {
         const matchingFiles = await window.api.scanFolder(folderPath);
-        if (matchingFiles.length === 0) {
+        window.api.logToFile('[DEBUG] Matching files found:', matchingFiles);
+        
+        if (!matchingFiles || matchingFiles.length === 0) {
             alert('No matching files found.');
             return;
         }
 
         const fileCount = matchingFiles.length;
+        // Pass the actual files array
         showScanResults(matchingFiles, folderPath, fileCount);
     } catch (error) {
-        console.error('[ERROR] Failed to scan folder:', error);
+        window.api.logToFile(`[ERROR] Failed to scan folder: ${error.message}`);
         alert('An error occurred while scanning the folder.');
     }
 });
 
+
 function showScanResults(files, folderPath, fileCount) {
+    window.api.logToFile('[DEBUG] Files received in showScanResults:', files);
     const modal = document.getElementById('scan-results-modal');
     const resultsContainer = document.getElementById('scan-results-container');
 
-    // Display file count
     resultsContainer.innerHTML = `
         <p><strong>${fileCount}</strong> matching files found in</p>
         <p>"${folderPath}".</p>
@@ -1692,30 +1765,55 @@ function showScanResults(files, folderPath, fileCount) {
     const moveBtn = document.getElementById('move-files-btn');
     const keepBtn = document.getElementById('keep-files-btn');
 
-    moveBtn.onclick = async () => handleFiles(files, 'move');
-    keepBtn.onclick = async () => handleFiles(files, 'keep');
+    moveBtn.onclick = async () => {
+        window.api.logToFile('[DEBUG] Move button clicked, files:', files);
+        await handleScannedFiles(files, 'move');
+    };
+    keepBtn.onclick = async () => {
+        window.api.logToFile('[DEBUG] Keep button clicked, files:', files);
+        await handleScannedFiles(files, 'keep');
+    };
 
     modal.classList.remove('hidden');
 }
 
-async function handleFiles(files, action) {
+async function handleScannedFiles(files, action) {
     try {
-        const result = await window.api.processScannedFiles(files, action);
-        if (result) {
-            initializeDevelopers();
-            initializeFiles();
-
-
-            // Close the modal after processing
-            const modal = document.getElementById('scan-results-modal');
-            if (modal) {
-                modal.classList.add('hidden'); // Hide the modal
-            }
-
-            alert('Files processed successfully.');
+        const fileArray = Array.isArray(files) ? files : [files];
+        
+        const progressBar = document.getElementById('scan-progress');
+        if (progressBar) {
+            progressBar.style.display = 'block';
         }
+        
+        const results = await window.api.processScannedFiles(fileArray, action);
+        
+        const processedCount = results.filter(r => r.success).length;
+        window.api.logToFile(`[INFO] Successfully processed ${processedCount} of ${fileArray.length} files`);
+
+        window.api.logToFile('[DEBUG] About to refresh lists');
+        initializeFiles()
+        window.api.logToFile('[DEBUG] File list refresh triggered');
+        refreshDeveloperList();
+        window.api.logToFile('[DEBUG] Developer list refresh triggered');
+
+        // Close the modal
+        const modal = document.getElementById('scan-results-modal');
+        modal.classList.add('hidden');
+        
+        return results;
     } catch (error) {
-        console.error('[ERROR] Failed to process files:', error.message);
-        alert('An error occurred while processing files. Please try again.');
+        window.api.logToFile(`[ERROR] Failed to process scanned files: ${error.message}`);
+        throw error;
+    } finally {
+        const progressBar = document.getElementById('scan-progress');
+        if (progressBar) {
+            progressBar.style.display = 'none';
+        }
     }
 }
+
+
+
+
+

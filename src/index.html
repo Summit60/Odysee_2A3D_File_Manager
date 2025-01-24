@@ -88,10 +88,13 @@
     <div id="content">
         <!-- Developer Section -->
         <div id="developer-section">
-            <input type="text" id="search-developers" placeholder="Search Developers">
+            <div class="search-container">
+                <input type="text" id="search-developers" placeholder="Search Developers" class="search-bar">
+                <span id="dev-results-counter" class="results-counter">Results: 0</span>
+            </div>
             <div id="developer-list" class="scrollable"></div>
         </div>
-    
+            
         <!-- Resizable Divider -->
         <div id="divider"></div>
     
@@ -108,7 +111,7 @@
 
     <div id="status-modal" style="display: flex;">
         <div class="modal-content">
-            <img src="./assets/icon.ico" alt="App Icon" class="modal-icon" />
+            <img src="./assets/icon.png" alt="App Icon" class="modal-icon" />
             <h2>Syncing to Blockchain</h2>
             <p>This will take a minute...</p>
             <p id="status-blocksBehind" class="progress-text">Blocks Remaining: 0</p>

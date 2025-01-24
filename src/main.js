@@ -21,7 +21,9 @@ const userDataPath = app.getPath('userData');
 const configPath = path.join(userDataPath, 'config.json');
 const currentVersion = app.getVersion();
 const appPath = getAppPath();
-const logFilePath = path.join(app.getPath('userData'), 'app.log');
+const logFilePath = app.isPackaged
+    ? path.join(process.resourcesPath, 'app.log') // In packaged app
+    : path.join(__dirname, 'app.log'); // In development
 
 
 
@@ -44,26 +46,30 @@ let maxConcurrentDownloads = appConfig.maxConcurrentDownloads; // Default value
 // Log to file function
 function logToFile(message) {
     const timestamp = new Date().toISOString();
-    const logMessage = `[${timestamp}] ${message}\n`; // Add a timestamp for better context
+    const logMessage = `[${timestamp}] ${message}\n`;
 
     try {
         fs.appendFileSync(logFilePath, logMessage, 'utf-8');
-        console.log(logMessage.trim()); // Log to console instead of calling logToFile
+        console.log(logMessage.trim()); // Log to console directly
     } catch (error) {
-        logToFile('[ERROR] Failed to write to log file:', error.message);
+        // Log error to console instead of recursive call
+        console.error(`Failed to write to log file: ${error.message}`);
     }
 }
 
-ipcMain.handle('log-to-file', async (_, { message, additionalInfo }) => {
+ipcMain.handle('log-to-file', async (_, messageOrObject) => {
     try {
-        logToFile(message, additionalInfo);
+        // Handle both string messages and object format
+        const message = typeof messageOrObject === 'string' 
+            ? messageOrObject 
+            : messageOrObject.message;
+            
+        logToFile(message);
     } catch (error) {
         console.error('[ERROR] Failed to log message:', error.message);
         throw error;
     }
 });
-
-
 
 function compareVersions(version1, version2) {
     const normalizeVersion = (version) =>
@@ -496,31 +502,86 @@ async function checkLbrynetStatus() {
     }
 }
 
-// Function to start lbrynet
-async function startLbrynet() {
-    return new Promise((resolve, reject) => {
-        const lbrynetPath = app.isPackaged
-            ? path.join(process.resourcesPath, 'utils', 'lbrynet.exe') // Packaged path
-            : path.resolve('./src/utils/lbrynet.exe'); // Development path
+function getLbrynetPath() {
+    const platform = process.platform;
+    const platformFolders = {
+        'win32': 'lbrynet-win',
+        'darwin': 'lbrynet-mac',
+        'linux': 'lbrynet-linux'
+    };
+    
+    const binaryNames = {
+        'win32': 'lbrynet.exe',
+        'darwin': 'lbrynet',
+        'linux': 'lbrynet'
+    };
 
-        logToFile('[DEBUG] Resolved lbrynet.exe path:', lbrynetPath);
-        const quotedLbrynetPath = `"${lbrynetPath}"`; // Quote the path to handle spaces
+    const lbrynetFolder = platformFolders[platform];
+    const binaryName = binaryNames[platform];
+
+    // Development path
+    let basePath = path.join(__dirname, 'assets', lbrynetFolder);
+    
+    // Packaged path
+    if (app.isPackaged) {
+        basePath = path.join(process.resourcesPath, 'assets', lbrynetFolder);
+    }
+
+    const fullPath = path.normalize(path.join(basePath, binaryName));
+    
+    logToFile('[DEBUG] Platform:', platform);
+    logToFile('[DEBUG] Base path:', basePath);
+    logToFile('[DEBUG] Full binary path:', fullPath);
+    
+    return fullPath;
+}
+
+async function startLbrynet() {
+    return new Promise(async (resolve, reject) => {
+        const lbrynetPath = getLbrynetPath();
+        logToFile('[DEBUG] Using lbrynet path:', lbrynetPath);
+
+        // Single check for binary existence
+        if (!fs.existsSync(lbrynetPath)) {
+            const errorMessage = `[ERROR] lbrynet binary not found at: ${lbrynetPath}`;
+            logToFile(errorMessage);
+            return reject(new Error(errorMessage));
+        }
+
+        // Single permission setting for Unix-based systems
+        if (process.platform !== 'win32') {
+            try {
+                fs.chmodSync(lbrynetPath, '755');
+                logToFile('[INFO] Ensured executable permissions for lbrynet on:', lbrynetPath);
+            } catch (error) {
+                const chmodError = `[ERROR] Failed to set executable permissions for lbrynet: ${error.message}`;
+                logToFile(chmodError);
+                return reject(new Error(chmodError));
+            }
+        }
 
         logToFile('[INFO] Starting lbrynet...');
-        logToFile(`[DEBUG] Resolved path to lbrynet.exe: ${quotedLbrynetPath}`);
+        const lbrynetProcess = spawn(
+            `"${lbrynetPath}"`, // Wrap path in quotes
+            ['start'], 
+            {
+                shell: true, // Always use shell on Windows for paths with spaces
+                cwd: path.dirname(lbrynetPath),
+                windowsHide: true,
+                env: {
+                    ...process.env,
+                    PATH: `${path.dirname(lbrynetPath)};${process.env.PATH}`
+                }
+            }
+        );
 
-        const lbrynetProcess = spawn(quotedLbrynetPath, ['start'], {
-            shell: true, // Use shell to handle quoted paths
-            cwd: path.dirname(lbrynetPath), // Ensure the working directory is set
-        });
+        //lbrynetProcess.stdout.on('data', (data) => {
+        //    logToFile(`[lbrynet stdout]: ${data}`);
+        //});
 
-        lbrynetProcess.stdout.on('data', (data) => {
-            logToFile(`[lbrynet stdout]: ${data}`);
-        });
-
-        lbrynetProcess.stderr.on('data', (data) => {
-            logToFile(`[lbrynet stderr]: ${data}`);
-        });
+        //lbrynetProcess.stderr.on('data', (data) => {
+        //    logToFile(`[lbrynet stderr]: ${data}`);
+        //});
 
         lbrynetProcess.on('error', (error) => {
             logToFile('[ERROR] Failed to start lbrynet:', error.message);
@@ -539,9 +600,10 @@ async function startLbrynet() {
         // Delay for daemon initialization
         setTimeout(() => {
             resolve();
-        }, 2000); // 2 seconds delay
+        }, 2000);
     });
 }
+
 
 // Function to ensure lbrynet is running
 async function ensureLbrynetRunning(mainWindow) {
@@ -558,7 +620,7 @@ async function ensureLbrynetRunning(mainWindow) {
     }
 
     // Step 3: Retry status requests after starting lbrynet
-    for (let i = 0; i < 40; i++) { // Poll up to 10 times (40 seconds)
+    for (let i = 0; i < 120; i++) { // Poll up to 120 times (120 seconds)
         await new Promise((resolve) => setTimeout(resolve, 1000));
         blocksBehind = await checkLbrynetStatus();
 
@@ -566,7 +628,7 @@ async function ensureLbrynetRunning(mainWindow) {
             logToFile('[INFO] lbrynet is now running.');
             break;
         } else {
-            logToFile(`[DEBUG] Retry ${i + 1}/10: Waiting for lbrynet to respond...`);
+            logToFile(`[DEBUG] Retry ${i + 1}/120: Waiting for lbrynet to respond...`);
         }
     }
 
@@ -583,17 +645,25 @@ async function ensureLbrynetRunning(mainWindow) {
 
 // Wait for synchronization to complete
 async function waitForSync(mainWindow) {
-    while (true) {
+    let syncConfirmed = false;
+    
+    while (!syncConfirmed) {
         const blocksBehind = await checkLbrynetStatus();
 
         if (blocksBehind === 0) {
-            logToFile('[INFO] Blockchain is fully synchronized.');
-            mainWindow.webContents.send('lbrynet-status', 'Synchronization complete.');
+            // Double check to confirm sync
+            const confirmCheck = await checkLbrynetStatus();
+            if (confirmCheck === 0) {
+                logToFile('[INFO] Blockchain is fully synchronized.');
+                mainWindow.webContents.send('lbrynet-status', 'Synchronization complete.');
+                mainWindow.webContents.send('sync-complete', true);
 
-            // Check for updates after synchronization
-            await checkForUpdates(currentVersion);
-
-            break; // Exit the loop when synchronized
+                // Check for updates after synchronization
+                await checkForUpdates(currentVersion);
+                
+                syncConfirmed = true;
+                break;
+            }
         } else if (blocksBehind !== null) {
             logToFile(`[DEBUG] Syncing blockchain: ${blocksBehind} blocks remaining...`);
             mainWindow.webContents.send(
@@ -605,7 +675,7 @@ async function waitForSync(mainWindow) {
             mainWindow.webContents.send('lbrynet-status', 'Waiting for lbrynet...');
         }
 
-        await new Promise((resolve) => setTimeout(resolve, 1000)); // Poll every second
+        await new Promise((resolve) => setTimeout(resolve, 1000));
     }
 }
 
@@ -700,11 +770,24 @@ async function ensureMainDbInLibrary(libraryFolder) {
 
         logToFile(`[INFO] Checking for main.db in: ${dbPath}`);
         logToFile(`[INFO] Resolving main.db from: ${appDbPath}`);
+        logToFile(`[DEBUG] Running on platform: ${process.platform}, isPackaged: ${app.isPackaged}`);
 
+        // Ensure library folder exists
+        if (!fs.existsSync(libraryFolder)) {
+            fs.mkdirSync(libraryFolder, { recursive: true });
+            logToFile('[INFO] Created library folder:', libraryFolder);
+        }
+
+        // Check for the existence of main.db
         if (!fs.existsSync(dbPath)) {
+            // Validate source main.db
             if (!fs.existsSync(appDbPath)) {
                 throw new Error(`Source main.db not found at: ${appDbPath}`);
             }
+
+            // Ensure source main.db is accessible
+            fs.accessSync(appDbPath, fs.constants.R_OK);
+            logToFile('[INFO] Source main.db is readable.');
 
             logToFile('[INFO] main.db not found in the library folder. Copying...');
             try {
@@ -871,14 +954,30 @@ function ensureDatabaseStructure(db) {
 
 // Utility function for cleanup
 function cleanupFolders(fileFolder, developerFolder) {
-    if (fs.existsSync(fileFolder) && fs.readdirSync(fileFolder).length === 0) {
-        fs.rmdirSync(fileFolder);
-        logToFile('[INFO] Cleaned up empty file folder:', fileFolder);
-    }
+    try {
+        // Clean up the file folder if empty
+        if (fs.existsSync(fileFolder)) {
+            const files = fs.readdirSync(fileFolder);
+            if (files.length === 0) {
+                fs.rmdirSync(fileFolder, { recursive: true });
+                logToFile('[INFO] Cleaned up empty file folder:', fileFolder);
+            } else {
+                logToFile('[DEBUG] File folder not empty:', fileFolder);
+            }
+        }
 
-    if (fs.existsSync(developerFolder) && fs.readdirSync(developerFolder).length === 0) {
-        fs.rmdirSync(developerFolder);
-        logToFile('[INFO] Cleaned up empty developer folder:', developerFolder);
+        // Clean up the developer folder if empty
+        if (fs.existsSync(developerFolder)) {
+            const files = fs.readdirSync(developerFolder);
+            if (files.length === 0) {
+                fs.rmdirSync(developerFolder, { recursive: true });
+                logToFile('[INFO] Cleaned up empty developer folder:', developerFolder);
+            } else {
+                logToFile('[DEBUG] Developer folder not empty:', developerFolder);
+            }
+        }
+    } catch (error) {
+        logToFile('[ERROR] Failed to clean up folders:', error.message);
     }
 }
 
@@ -887,23 +986,32 @@ function cleanupFolders(fileFolder, developerFolder) {
 ipcMain.handle('open-folder', async (event, filePath) => {
     try {
         const folderPath = path.dirname(filePath); // Get the directory of the file
-        logToFile(`[INFO] Opening folder: ${folderPath}`);
+        logToFile(`[INFO] Attempting to open folder: ${folderPath}`);
 
-        const command = process.platform === 'win32' ? `explorer.exe "${folderPath}"` : `open "${folderPath}"`;
+        // Determine the command based on the platform
+        let command;
+        if (process.platform === 'win32') {
+            command = `explorer.exe "${folderPath}"`;
+        } else if (process.platform === 'darwin') {
+            command = `open "${folderPath}"`;
+        } else if (process.platform === 'linux') {
+            command = `xdg-open "${folderPath}"`;
+        } else {
+            throw new Error('Unsupported platform: ' + process.platform);
+        }
 
+        // Execute the command
         exec(command, (error) => {
             if (error) {
-                // Log the error but don't treat it as critical
                 logToFile('[WARN] Failed to execute command:', error.message);
-                // Send feedback to the renderer process if needed
-                event.sender.send('alert', `Folder opened, but a non-critical error occurred: ${error.message}`);
+                event.sender.send('alert', `Failed to open folder: ${error.message}`);
             } else {
                 logToFile('[INFO] Folder opened successfully.');
             }
         });
     } catch (err) {
         logToFile('[ERROR] Failed to open folder:', err.message);
-        throw err; // If it's a critical error, rethrow it
+        throw err; // Re-throw the error for critical issues
     }
 });
 
@@ -912,101 +1020,120 @@ ipcMain.handle('getLibraryFolder', () => {
 });
 
 ipcMain.handle('executeCommand', async (event, { command }) => {
-    return new Promise((resolve, reject) => {
-        exec(command, (err, stdout, stderr) => {
-            if (err) {
-                logToFile(`[ERROR] Failed to execute command: ${command}`, stderr);
-                reject(new Error(stderr));
-            } else {
-                logToFile(`[INFO] Command executed successfully: ${command}`, stdout);
-                resolve(stdout);
-            }
+    try {
+        // Adjust command based on the platform
+        const platform = process.platform;
+        if (platform === 'win32') {
+            // Windows-specific adjustments (e.g., cmd /c)
+            command = `cmd /c ${command}`;
+        } else if (platform === 'darwin' || platform === 'linux') {
+            // Unix-based adjustments (e.g., bash -c for complex commands)
+            command = `bash -c "${command}"`;
+        }
+
+        return new Promise((resolve, reject) => {
+            exec(command, (err, stdout, stderr) => {
+                if (err) {
+                    logToFile(`[ERROR] Failed to execute command: ${command}`, stderr);
+                    reject(new Error(stderr || 'Unknown error occurred'));
+                } else {
+                    logToFile(`[INFO] Command executed successfully: ${command}`, stdout);
+                    resolve(stdout);
+                }
+            });
         });
-    });
+    } catch (error) {
+        logToFile(`[CRITICAL] Unexpected error while executing command: ${command}`, error.message);
+        throw error; // Re-throw to the renderer process
+    }
 });
+
+// Helper to check if a folder is empty
+async function isEmptyFolder(folderPath) {
+    try {
+        const files = await fs.promises.readdir(folderPath);
+        return files.length === 0;
+    } catch (err) {
+        if (err.code === 'ENOENT') {
+            logToFile('[WARN] Folder not found, assuming empty:', folderPath);
+            return true;
+        }
+        throw err;
+    }
+}
 
 ipcMain.handle('delete-file', async (event, filePath) => {
     try {
-        logToFile('[INFO] Deleting file and its folders:', filePath);
+        logToFile('[INFO] Starting deletion process for file:', filePath);
 
-        // Validate file path
-        if (!filePath) {
-            throw new Error('File path is null or undefined.');
-        }
+        if (!filePath) throw new Error('File path is null or undefined.');
 
-        // Delete the file from disk
-        if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath);
-            logToFile('[INFO] File deleted:', filePath);
-        } else {
-            logToFile('[WARN] File not found on disk:', filePath);
-        }
+        // Delete the file
+        await fs.promises.unlink(filePath);
+        logToFile('[INFO] File deleted:', filePath);
 
-        // Get the file's containing folder
+        // Get folder paths
         const fileFolder = path.dirname(filePath);
-
-        // Check if the file folder is empty and delete if so
-        if (fs.existsSync(fileFolder) && fs.readdirSync(fileFolder).length === 0) {
-            fs.rmdirSync(fileFolder);
-            logToFile('[INFO] File folder deleted:', fileFolder);
-        } else {
-            logToFile('[INFO] File folder not empty or does not exist:', fileFolder);
-        }
-
-        // Get the developer folder (parent of file folder)
         const devFolder = path.dirname(fileFolder);
 
-        // Check if the developer folder is empty and delete if so
-        if (fs.existsSync(devFolder) && fs.readdirSync(devFolder).length === 0) {
-            fs.rmdirSync(devFolder);
-            logToFile('[INFO] Developer folder deleted:', devFolder);
-        } else {
-            logToFile('[INFO] Developer folder not empty or does not exist:', devFolder);
+        // Check and delete empty folders
+        try {
+            if (await isEmptyFolder(fileFolder)) {
+                await fs.promises.rmdir(fileFolder);
+                logToFile('[INFO] File folder deleted:', fileFolder);
+            }
+
+            if (await isEmptyFolder(devFolder)) {
+                await fs.promises.rmdir(devFolder);
+                logToFile('[INFO] Developer folder deleted:', devFolder);
+            }
+        } catch (folderError) {
+            logToFile('[WARN] Folder deletion error:', folderError.message);
         }
 
-        // Update the file metadata in the database
+        // Update the database
         const downloadedDbPath = path.join(global.libraryFolder, 'main.db');
-        logToFile('[DEBUG] main.db path:', downloadedDbPath);
+        await updateDatabaseRecord(downloadedDbPath, filePath);
 
-        const db = new sqlite3.Database(downloadedDbPath);
-
-        await new Promise((resolve, reject) => {
-            db.run(
-                `UPDATE Claims
-                 SET Downloaded = 0, File_Path = NULL
-                 WHERE File_Path = ?`,
-                [filePath],
-                (err) => {
-                    if (err) {
-                        logToFile('[ERROR] Failed to update file record in database:', err.message);
-                        reject(new Error('Failed to update file record in database.'));
-                    } else {
-                        logToFile('[INFO] File record updated in database.');
-                        resolve();
-                    }
-                }
-            );
-        });
-
-        db.close();
-
-        const devName = path.basename(devFolder); // Extract developer name from the folder name
-
-        // Notify renderer to update stats and UI
-        event.sender.send('file-status-updated', {
-            fileName: path.basename(filePath),
-            status: 'not-downloaded',
-            developerName: devName,
-        });
+        // Notify the renderer process
+        const devName = path.basename(devFolder);
+        if (!event.sender.isDestroyed()) {
+            event.sender.send('file-status-updated', {
+                fileName: path.basename(filePath),
+                status: 'not-downloaded',
+                developerName: devName,
+            });
+        }
 
         logToFile('[INFO] Deletion process completed successfully.');
         return { success: true };
-
     } catch (error) {
-        logToFile('[ERROR] Failed to delete file or update database:', error.message);
+        logToFile(`[ERROR] Error during deletion process: ${error.message}\nStack: ${error.stack}`);
         return { success: false, message: error.message };
     }
 });
+
+// Function to update the database record
+async function updateDatabaseRecord(dbPath, filePath) {
+    const db = new sqlite3.Database(dbPath);
+    return new Promise((resolve, reject) => {
+        db.run(
+            `UPDATE Claims SET Downloaded = 0, File_Path = NULL WHERE File_Path = ?`,
+            [filePath],
+            (err) => {
+                if (err) {
+                    logToFile('[ERROR] Failed to update database record:', err.message);
+                    reject(new Error('Failed to update database record.'));
+                } else {
+                    logToFile('[INFO] Database record updated for file:', filePath);
+                    resolve();
+                }
+            }
+        );
+    }).finally(() => {
+        db.close();
+    });
+}
 
 ipcMain.handle('get-config', async () => {
     return appConfig; // Return the entire appConfig object
@@ -1019,7 +1146,7 @@ ipcMain.handle('download-file', async (event, file) => {
         const message = 'Library folder not set. Please set it first.';
         logToFile('[ERROR]', message);
         event.sender.send('download-failed', message);
-        event.sender.send('alert', message); // Notify the renderer process
+        event.sender.send('alert', message);
         return;
     }
 
@@ -1030,31 +1157,41 @@ ipcMain.handle('download-file', async (event, file) => {
     const fileName = file.File_Download_Name || 'UnnamedFile';
     const finalFilePath = path.join(fileFolder, fileName);
 
-    let statusEmitted = false; // Track if a status has been emitted for this file
+    let statusEmitted = false;
 
     try {
         logToFile('[DEBUG] Ensuring folders exist...');
-        // Ensure developer and file folders exist
         fs.mkdirSync(developerFolder, { recursive: true });
         fs.mkdirSync(fileFolder, { recursive: true });
 
-        // Path to lbrynet executable
-        const lbrynetPath = path.join(appPath, 'utils', 'lbrynet.exe');
+        const lbrynetExecutable = process.platform === 'win32' 
+            ? 'lbrynet.exe' 
+            : process.platform === 'darwin' 
+            ? 'lbrynet-macos' 
+            : 'lbrynet-linux';
+        const lbrynetPath = getLbrynetPath();
+
         if (!fs.existsSync(lbrynetPath)) {
-            logToFile('[ERROR] lbrynet.exe not found at:', lbrynetPath);
-            throw new Error('lbrynet.exe missing');
+            logToFile('[ERROR] lbrynet executable not found:', lbrynetPath);
+            throw new Error(`lbrynet executable missing: ${lbrynetPath}`);
         }
 
-        logToFile('[DEBUG] Executing lbrynet.exe...');
-        // Spawn the download process
+        if (process.platform !== 'win32') {
+            fs.chmodSync(lbrynetPath, 0o755);
+        }
+
+        const finalFilePath = path.normalize(path.join(fileFolder, fileName));
+        logToFile('[DEBUG] Final file path:', finalFilePath);
+
+        logToFile('[DEBUG] Executing lbrynet...');
         const downloadProcess = spawn(lbrynetPath, [
             'get',
             file.Alt_File_URL || file.File_URL,
             `--file_name=${fileName}`,
             `--download_directory=${fileFolder}`,
-        ]);
+            '--save_file=true'  // Add this flag
+        ]);        
 
-        // Log stdout and stderr from the download process
         downloadProcess.stdout.on('data', (data) => {
             const message = data.toString();
             logToFile(`[INFO] lbrynet stdout: ${message}`);
@@ -1065,7 +1202,6 @@ ipcMain.handle('download-file', async (event, file) => {
             logToFile(`[ERROR] lbrynet stderr: ${message}`);
         });
 
-        // Track active process for cancellation
         global.activeProcesses = global.activeProcesses || [];
         global.activeProcesses.push(downloadProcess.pid);
 
@@ -1075,75 +1211,80 @@ ipcMain.handle('download-file', async (event, file) => {
             if (code === 0) {
                 logToFile(`[DEBUG] Verifying file existence for: ${file.File_Name}`);
 
-                // Check if the file exists
-                if (fs.existsSync(finalFilePath)) {
-                    logToFile('[INFO] File verified successfully:', finalFilePath);
+                let retryCount = 0;
+                const maxRetries = 5;
+                const retryDelay = 1000;
 
-                    if (!statusEmitted) {
-                        event.sender.send('Trigger-counter', { status: 'downloaded', fileName: file.File_Name });
-                        statusEmitted = true;
-                    }
+                const checkFile = async () => {
+                    if (fs.existsSync(finalFilePath)) {
+                        logToFile('[INFO] File verified successfully:', finalFilePath);
 
-                    // Update the `Downloaded` status in `main.db`
-                    const downloadedDbPath = path.join(global.libraryFolder, 'main.db');
-                    logToFile('[DEBUG] Updating Downloaded status in main.db at:', downloadedDbPath);
-
-                    const db = new sqlite3.Database(downloadedDbPath);
-                    db.run(
-                        `UPDATE Claims SET Downloaded = 1, File_Path = ? WHERE File_Name = ?`,
-                        [finalFilePath, file.File_Name],
-                        (err) => {
-                            if (err) {
-                                logToFile('[ERROR] Failed to update database:', err.message);
-                            } else {
-                                logToFile('[INFO] File status updated to Downloaded in database.');
-
-                                // Send events to update the renderer
-                                event.sender.send('file-status-updated', {
-                                    fileName: file.File_Name,
-                                    status: 'downloaded',
-                                });
-                                event.sender.send('update-developer-stats', file.Dev_Name);
-                                event.sender.send('update-developer-stats', 'ALL');
-                            }
+                        if (!statusEmitted) {
+                            event.sender.send('Trigger-counter', { status: 'downloaded', fileName: file.File_Name });
+                            statusEmitted = true;
                         }
-                    );
-                    db.close();
-                } else {
-                    logToFile('[ERROR] File does not exist after download:', finalFilePath);
 
+                        const downloadedDbPath = path.join(global.libraryFolder, 'main.db');
+                        logToFile('[DEBUG] Updating Downloaded status in main.db at:', downloadedDbPath);
+
+                        const db = new sqlite3.Database(downloadedDbPath);
+                        db.run(
+                            `UPDATE Claims SET Downloaded = 1, File_Path = ? WHERE File_Name = ?`,
+                            [finalFilePath, file.File_Name],
+                            (err) => {
+                                if (err) {
+                                    logToFile('[ERROR] Failed to update database:', err.message);
+                                } else {
+                                    logToFile('[INFO] File status updated to Downloaded in database.');
+                                    event.sender.send('file-status-updated', {
+                                        fileName: file.File_Name,
+                                        status: 'downloaded',
+                                    });
+                                    event.sender.send('update-developer-stats', file.Dev_Name);
+                                    event.sender.send('update-developer-stats', 'ALL');
+                                }
+                            }
+                        );
+                        db.close();
+                        return true;
+                    }
+                    
+                    if (retryCount < maxRetries) {
+                        retryCount++;
+                        logToFile(`[INFO] File not found, retry attempt ${retryCount} of ${maxRetries}`);
+                        await new Promise(resolve => setTimeout(resolve, retryDelay));
+                        return checkFile();
+                    }
+                    return false;
+                };
+
+                const fileExists = await checkFile();
+                
+                if (!fileExists) {
+                    logToFile('[ERROR] File does not exist after all retries:', finalFilePath);
                     if (!statusEmitted) {
                         event.sender.send('Trigger-counter', { status: 'failed', fileName: file.File_Name });
                         statusEmitted = true;
                     }
-
-                    // Clean up empty folders
                     cleanupFolders(fileFolder, developerFolder);
                 }
             } else {
                 logToFile('[ERROR] Download failed for file:', file.File_Name);
-
                 if (!statusEmitted) {
                     event.sender.send('Trigger-counter', { status: 'failed', fileName: file.File_Name });
                     statusEmitted = true;
                 }
-
-                // Clean up empty folders
                 cleanupFolders(fileFolder, developerFolder);
             }
 
-            // Remove process from activeProcesses
             global.activeProcesses = global.activeProcesses.filter(pid => pid !== downloadProcess.pid);
         });
     } catch (error) {
         logToFile('[ERROR] Failed to download file:', error);
-
         if (!statusEmitted) {
             event.sender.send('Trigger-counter', { status: 'failed', fileName: file.File_Name });
             statusEmitted = true;
         }
-
-        // Clean up empty folders
         cleanupFolders(fileFolder, developerFolder);
     }
 });
@@ -1179,10 +1320,13 @@ const cleanTempFolders = () => {
             return;
         }
 
+        // Filter and delete `_MEI` temp folders
         files
             .filter(file => file.startsWith('_MEI'))
             .forEach(folder => {
                 const folderPath = path.join(tempDir, folder);
+
+                // Check existence and delete folder
                 fs.rm(folderPath, { recursive: true, force: true }, err => {
                     if (err) {
                         logToFile(`[ERROR] Failed to remove folder: ${folderPath}`, err.message);
@@ -1283,7 +1427,7 @@ const createAppMenu = (mainWindow) => {
                             `);
                 
                             try {
-                                const { populateDatabase } = await import('./xlsConverter.mjs');
+                                const { populateDatabase } = await import('./odsConverter.mjs');
                 
                                 const libraryFolder = appConfig.libraryFolder;
                                 if (!libraryFolder || typeof libraryFolder !== 'string' || !fs.existsSync(libraryFolder)) {
@@ -1384,7 +1528,7 @@ const createAppMenu = (mainWindow) => {
             submenu: [
                 {
                     label: 'Toggle Developer Tools',
-                    accelerator: 'Ctrl+Shift+I',
+                    accelerator: process.platform === 'darwin' ? 'Cmd+Shift+I' : 'Ctrl+Shift+I',
                     click: () => {
                         mainWindow.webContents.toggleDevTools();
                     },
@@ -1402,20 +1546,24 @@ const createAppMenu = (mainWindow) => {
                         });
         
                         if (choice === 1) {
-                            try {
-                                const dbPath = path.join(global.libraryFolder, 'main.db');
-                                const db = new sqlite3.Database(dbPath);
+                            if (!global.libraryFolder || typeof global.libraryFolder !== 'string') {
+                                dialog.showMessageBoxSync({
+                                    type: 'error',
+                                    title: 'Error',
+                                    message: 'Library folder is not set. Please set the library folder first.',
+                                });
+                                return;
+                            }
         
+                            const dbPath = path.join(global.libraryFolder, 'main.db');
+                            let db;
+        
+                            try {
+                                db = new sqlite3.Database(dbPath);
                                 db.serialize(() => {
                                     db.run('DELETE FROM Claims', (err) => {
                                         if (err) {
-                                            logToFile('[ERROR] Failed to erase database:', err.message);
-                                            dialog.showMessageBoxSync({
-                                                type: 'error',
-                                                title: 'Erase Database',
-                                                message: `An error occurred while erasing the database: ${err.message}`,
-                                            });
-                                            return;
+                                            throw new Error(`Failed to erase database: ${err.message}`);
                                         }
                                         mainWindow.webContents.send('reload-data');
                                         logToFile('[INFO] Database successfully erased.');
@@ -1426,10 +1574,15 @@ const createAppMenu = (mainWindow) => {
                                         });
                                     });
                                 });
-        
-                                db.close();
                             } catch (error) {
-                                logToFile('[ERROR] Failed to erase database:', error.message);
+                                logToFile('[ERROR]', `Platform: ${process.platform}, Error: ${error.message}`);
+                                dialog.showMessageBoxSync({
+                                    type: 'error',
+                                    title: 'Error',
+                                    message: error.message,
+                                });
+                            } finally {
+                                if (db) db.close();
                             }
                         }
                     },
@@ -1447,20 +1600,24 @@ const createAppMenu = (mainWindow) => {
                         });
         
                         if (choice === 1) {
-                            try {
-                                const dbPath = path.join(global.libraryFolder, 'main.db');
-                                const db = new sqlite3.Database(dbPath);
+                            if (!global.libraryFolder || typeof global.libraryFolder !== 'string') {
+                                dialog.showMessageBoxSync({
+                                    type: 'error',
+                                    title: 'Error',
+                                    message: 'Library folder is not set. Please set the library folder first.',
+                                });
+                                return;
+                            }
         
+                            const dbPath = path.join(global.libraryFolder, 'main.db');
+                            let db;
+        
+                            try {
+                                db = new sqlite3.Database(dbPath);
                                 db.serialize(() => {
                                     db.run('UPDATE Claims SET Downloaded = 0', (err) => {
                                         if (err) {
-                                            logToFile('[ERROR] Failed to reset downloads:', err.message);
-                                            dialog.showMessageBoxSync({
-                                                type: 'error',
-                                                title: 'Reset Downloads',
-                                                message: `An error occurred while resetting downloads: ${err.message}`,
-                                            });
-                                            return;
+                                            throw new Error(`Failed to reset downloads: ${err.message}`);
                                         }
                                         mainWindow.webContents.send('reload-data');
                                         logToFile('[INFO] Downloads successfully reset.');
@@ -1471,16 +1628,21 @@ const createAppMenu = (mainWindow) => {
                                         });
                                     });
                                 });
-        
-                                db.close();
                             } catch (error) {
-                                logToFile('[ERROR] Failed to reset downloads:', error.message);
+                                logToFile('[ERROR]', `Platform: ${process.platform}, Error: ${error.message}`);
+                                dialog.showMessageBoxSync({
+                                    type: 'error',
+                                    title: 'Error',
+                                    message: error.message,
+                                });
+                            } finally {
+                                if (db) db.close();
                             }
                         }
                     },
                 },
             ],
-        },
+        }        
     ];
 
     Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate));
@@ -1502,7 +1664,7 @@ app.on('ready', async () => {
             await ensureDatabaseStructure(db);
             logToFile('[INFO] Database structure ensured.');
         } catch (error) {
-            logToFile('[ERROR] Failed to ensure database structure:', error.message);
+            logToFile(`[ERROR] Failed to ensure database structure: ${error.stack}`);
             app.quit();
         } finally {
             db.close();
@@ -1512,30 +1674,33 @@ app.on('ready', async () => {
     mainWindow = new BrowserWindow({
         width: 1400,
         height: 1000,
-        icon: path.join(appPath, 'assets', 'icon.ico'),
+        icon: process.platform === 'win32'
+            ? path.join(appPath, 'assets', 'icon.ico')
+            : process.platform === 'darwin'
+            ? path.join(appPath, 'assets', 'icon.icns')
+            : path.join(appPath, 'assets', 'icon.png'),
         webPreferences: {
             preload: path.join(appPath, 'preload.js'),
             nodeIntegration: true,
             contextIsolation: true,
-            devTools: true,
+            devTools: process.env.NODE_ENV !== 'production',
         },
     });
 
-    mainWindow.loadURL(`file://${path.join(__dirname, '/index.html')}`);
+    mainWindow.loadURL(`file://${path.join(app.getAppPath(), 'src', 'index.html')}`);
 
     try {
         logToFile('[DEBUG] About to call ensureLbrynetRunning...');
         await ensureLbrynetRunning(mainWindow);
     } catch (error) {
-        logToFile('[ERROR] Failed to start lbrynet:', error.message);
+        logToFile(`[ERROR] Failed to start lbrynet: ${error.stack}`);
     }
 
     // Create the menu
     createAppMenu(mainWindow);
 });
 
-
-//Handles application exit when all windows are closed.
+// Handles application exit when all windows are closed.
 app.on('window-all-closed', () => {
     logToFile('[INFO] All windows closed. Exiting application.');
     if (process.platform !== 'darwin') {
@@ -1556,6 +1721,7 @@ app.on('activate', () => {
         mainWindow = new BrowserWindow();
     }
 });
+
 
 /////////////////other//////////////////
 
@@ -1590,22 +1756,6 @@ ipcMain.handle('database-updated', async () => {
     mainWindow.webContents.send('reload-data');
 });
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 ipcMain.handle('select-folder', async () => {
     const result = dialog.showOpenDialogSync({
         properties: ['openDirectory'],
@@ -1614,30 +1764,36 @@ ipcMain.handle('select-folder', async () => {
 });
 
 ipcMain.handle('scan-folder', async (_, folderPath) => {
-    const dbPath = path.join(libraryFolder, 'main.db');
+    const normalizedFolderPath = path.normalize(folderPath);
+    const dbPath = path.resolve(libraryFolder, 'main.db');
     const db = new sqlite3.Database(dbPath);
 
     const fileNames = await new Promise((resolve, reject) => {
         db.all('SELECT File_Download_Name FROM Claims', [], (err, rows) => {
-            if (err) reject(err);
-            else resolve(rows.map((row) => row.File_Download_Name));
+            if (err) return reject(err);
+            resolve(rows.map((row) => row.File_Download_Name));
         });
     });
 
     const matchingFiles = [];
-    const scanFolderRecursive = (folder) => {
-        const entries = fs.readdirSync(folder, { withFileTypes: true });
-        entries.forEach((entry) => {
-            const fullPath = path.join(folder, entry.name);
-            if (entry.isDirectory()) {
-                scanFolderRecursive(fullPath);
-            } else if (fileNames.includes(entry.name)) {
-                matchingFiles.push(fullPath);
+    const scanFolderRecursive = async (folder) => {
+        try {
+            const entries = await fs.promises.readdir(folder, { withFileTypes: true });
+            for (const entry of entries) {
+                const fullPath = path.join(folder, entry.name);
+                if (entry.isDirectory()) {
+                    await scanFolderRecursive(fullPath);
+                } else if (fileNames.includes(entry.name)) {
+                    matchingFiles.push(fullPath);
+                }
             }
-        });
+        } catch (error) {
+            logToFile('[ERROR] Folder scan failed:', error.message);
+            throw error;
+        }
     };
 
-    scanFolderRecursive(folderPath);
+    await scanFolderRecursive(normalizedFolderPath);
     return matchingFiles;
 });
 
@@ -1645,21 +1801,17 @@ ipcMain.handle('process-scanned-files', async (_, { files, action }) => {
     const dbPath = path.join(libraryFolder, 'main.db');
     const db = new sqlite3.Database(dbPath);
 
-    const processFile = async (filePath) => {
+    // Wrap database operations in a promise for better control
+    const processFile = (filePath) => {
         const fileName = path.basename(filePath);
-
         return new Promise((resolve, reject) => {
             db.get(
                 'SELECT Dev_Name, Alt_File_Name, File_Claim_ID FROM Claims WHERE File_Download_Name = ?',
                 [fileName],
                 (err, row) => {
                     if (err) {
-                        logToFile('[ERROR] Failed to fetch metadata:', err.message);
-                        return reject(err);
-                    }
-                    if (!row) {
-                        logToFile('[WARN] Metadata not found for File_Download_Name:', fileName);
-                        return resolve(null);
+                        logToFile('[ERROR] Database query failed:', err.message);
+                        reject(err);
                     }
                     resolve(row);
                 }
@@ -1668,33 +1820,43 @@ ipcMain.handle('process-scanned-files', async (_, { files, action }) => {
     };
 
     try {
+        const results = [];
         for (const file of files) {
             const metadata = await processFile(file);
-            if (!metadata) continue; // Skip files with missing metadata
+            if (!metadata) {
+                logToFile('[WARN] No matching record found for:', file);
+                continue;
+            }
 
             const { Dev_Name, Alt_File_Name, File_Claim_ID } = metadata;
             const destinationPath = path.join(libraryFolder, Dev_Name, Alt_File_Name, path.basename(file));
 
             if (action === 'move') {
-                fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
-                fs.renameSync(file, destinationPath);
+                await fs.promises.mkdir(path.dirname(destinationPath), { recursive: true });
+                await fs.promises.rename(file, destinationPath);
+                logToFile('[INFO] Moved file to:', destinationPath);
             }
 
-            // Update database
-            db.run(
-                `UPDATE Claims SET File_Path = ?, Downloaded = 1 WHERE File_Claim_ID = ?`,
-                [action === 'move' ? destinationPath : file, File_Claim_ID],
-                (err) => {
-                    if (err) logToFile('[ERROR] Failed to update database:', err.message);
-                }
-            );
+            // Update database with new file status
+            await new Promise((resolve, reject) => {
+                db.run(
+                    `UPDATE Claims SET File_Path = ?, Downloaded = 1 WHERE File_Claim_ID = ?`,
+                    [action === 'move' ? destinationPath : file, File_Claim_ID],
+                    (err) => {
+                        if (err) reject(err);
+                        resolve();
+                    }
+                );
+            });
+
+            results.push({
+                originalPath: file,
+                newPath: action === 'move' ? destinationPath : file,
+                success: true
+            });
         }
 
-        logToFile(`[INFO] Processed ${files.length} files.`);
-        return true;
-    } catch (error) {
-        logToFile('[ERROR] Failed to process files:', error.message);
-        throw error;
+        return results;
     } finally {
         db.close();
     }
